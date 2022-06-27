@@ -1,0 +1,7 @@
+unitary generation: d = 20 gpu: 0.00523 s cpu: 0.35 s 67 times speed up
+                    d = 40 gpu: 0.0432 s  cpu: 2.4 s  56 times speed up
+                    d = 80 gpu: 0.571 s   cpu: 21.45 s 38 times speed up
+
+overall: m = 1 gpu: cpu: 1.38
+         m = 4 gpu: cpu: 4.18
+         m = 8 gpu: cpu: 282
