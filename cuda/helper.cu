@@ -12,31 +12,10 @@ void random_init(float *data, size_t size) {
 void random_init(int* array, size_t size, int low_limit, int high_limit)
 {
     int range = high_limit - low_limit + 1;
-    for(int i=0;i<size;i++)
+    for(size_t i=0;i<size;i++)
     {
         array[i] = rand()%range + low_limit;
     }
-}
-
-// Obtain the indices of a sorted array where the entries increases. Used for charges.
-__global__
-void get_index(const int *charges, int *indices, const int size) {
-    int charge_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (charge_idx < size -1) {
-        int charge = charges[charge_idx];
-        int next_charge = charges[charge_idx + 1];
-        if (charge != next_charge) {
-            indices[next_charge] = charge_idx + 1;
-        }
-    }
-}
-
-int* index_of_charge_increase(const int *charges, const int size) {
-    int *indices;
-    cudaMalloc(&indices, size * sizeof(int));
-    dim3 grid((size + 63) / 64);
-    get_index<<<grid, 64>>>(charges, indices, size);
-    return indices;
 }
 
 // Checking if GPU computed results agree with the CPU results
