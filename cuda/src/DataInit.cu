@@ -1,13 +1,22 @@
 #include <cstdio>
+#include "../include/DataInit.cuh"
 
-#include <helper.h>
+// Fill array with random floats
+void random_init(float *data, size_t size) {
+    for (size_t i = 0; i < size; ++i) {
+        data[i] = float(rand()) / RAND_MAX;
+    }
+}
 
-struct NewData {
-    int m;
-    int k;
-    int n;
-    float* data;
-};
+// Fill array with random ints between a ranges
+void random_init(int* array, size_t size, int low_limit, int high_limit)
+{
+    int range = high_limit - low_limit + 1;
+    for(size_t i=0;i<size;i++)
+    {
+        array[i] = rand()%range + low_limit;
+    }
+}
 
 // Fill array with random floats but each left charge must occupy multiples of eight rows
 NewData left_align_init_1d(const int m, const int d, const int *inc1) {

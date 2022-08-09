@@ -1,11 +1,12 @@
-// How to compile: nvcc -o test test.cu -arch sm_50 -I ~/YHs_Sample/cnpy -I ./ -L/usr/local/lib -lcnpy -lz
+// How to compile: nvcc -o main main.cu ./src/kernel.cu ./src/DataInit.cu ./src/check.cu ./src/sort.cu -arch sm_50 -I ~/YHs_Sample/cnpy -I ./include -L/usr/local/lib -lcnpy
 #include <assert.h>
 
 #include <cnpy.h>
-#include <kernel.h>
-#include <helper.h>
-#include <sort.h>
-#include <TwoDInit.h>
+
+#include <kernel.cuh>
+#include <check.cuh>
+#include <sort.cuh>
+#include <DataInit.cuh>
 
 int main() {
     unsigned int m;
@@ -60,7 +61,7 @@ int main() {
         SortedInfo sortedL = sort(d_CL, m);
         int* d_incL = sortedL.inc;
         int* d_idL = sortedL.id;
-        int *h_idL, *h_incL;
+        int* h_idL, *h_incL;
         cudaMallocHost(&h_idL, m * sizeof(int));
         cudaMallocHost(&h_incL, m * sizeof(int));
         cudaMemcpy(h_idL, d_idL, m * sizeof(int), cudaMemcpyDefault);

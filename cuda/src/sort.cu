@@ -4,6 +4,8 @@
 #include <thrust/execution_policy.h>
 #include <thrust/device_vector.h>
 
+#include "../include/sort.cuh"
+
 // Obtain the indices of a sorted array where the entries increases. Used for charges.
 __global__
 void get_index(const int *charges, int *indices, const int size) {
@@ -33,12 +35,6 @@ void sequence(int *indices, const int size) {
         indices[idx] = idx;
     }
 }
-
-// Sorts charges and returns new indices
-struct SortedInfo {
-    int* inc;
-    int* id;
-};
 
 SortedInfo sort(int *d_C, const int size) {
     // initialize array of indices
@@ -77,14 +73,6 @@ SortedInfo sort(int *d_C, const int size) {
     output.id = d_id;
     return output;
 }
-
-// Fill array with random floats but each charge must occupy multiples of eight rows/columns
-struct RemapInfo {
-    int size;
-    int *index;
-    int *inc;
-    int *c;
-};
 
 RemapInfo index_remapping(const int size, const int d, const int *index, const int *inc) {
 

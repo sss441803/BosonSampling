@@ -1,4 +1,17 @@
-#include <TwoDInit.cu>
+#pragma once
+
+// Fill array with random floats
+void random_init(float *data, size_t size);
+
+// Fill array with random ints between a ranges
+void random_init(int* array, size_t size, int low_limit, int high_limit);
+
+struct NewData {
+    int m;
+    int k;
+    int n;
+    float* data;
+};
 
 // Fill array with random floats but each left charge must occupy multiples of eight rows
 NewData left_align_init_1d(const int m, const int d, const int *inc1);
