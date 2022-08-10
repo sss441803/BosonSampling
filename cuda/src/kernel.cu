@@ -393,6 +393,24 @@ void kernel(const int d,
         #pragma unroll
         for (int k_frag = 0; k_frag < 8; ++k_frag) {
             if (k_tile < k_tiles || k_frag < first_k_tile){
+                // Load next 
+                if (c == incCidx) {
+                    cc++;
+                    incCidx = -1;
+                    for (; cc <= d && incCidx <= 0; ++cc) {
+                        incCidx = incC[cc];
+                    }
+                    cc--;
+                    //printf("c1: %i, inc1idx: %i iOffset: %i.\n", c1, inc1idx, iOffsets[c1]);
+                    #pragma unroll
+                    for (int i = 0; i < 2; ++i) {
+                        for (int j = 0; j < 2; ++j) {
+                            const char *U_ldg_ptr = (const char *)(U + (cl[i] - tau) * d * d + (tau - cr[j]) * d + (cl[i] - (cc-1)));
+                            ldg32_nc_0(u[i][j], U_ldg_ptr, true);
+                        }
+                    }
+                }
+                // Increase c
                 c += 1;
                 c_rem += 1;
                 if (c_rem == 0) {
@@ -401,12 +419,6 @@ void kernel(const int d,
                     __syncthreads();
                     sts32(LC_ldg_reg, LC_sts_addr);
                     __syncthreads();
-                }
-                if (c == incCidx) {
-                    for (; cc < d && incCidx == 0; ++cc) {
-                        lds32(incCidx, incC_lds_addr + cc * sizeof(int));
-                        __syncthreads();
-                    }
                 }
             }
 

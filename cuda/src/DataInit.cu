@@ -49,18 +49,21 @@ NewData left_align_init_1d(const int m, const int d, const int *inc1) {
     cudaMallocHost(&data, mNew * sizeof(float));
     // Fill in a new array
     c1 = 0;
+    int old_c1 = c1;
     inc1idx = 0;
     for (int i = 0; i < m; ++i) {
         if (i == inc1idx) {
+            old_c1 = c1;
             c1++;
             inc1idx = -1;
-            for (; c1 <= d && inc1idx <= 0; ++c1) {
+            for (; c1 < d && inc1idx <= 0; ++c1) {
                 inc1idx = inc1[c1];
+                if (inc1idx == 0) { old_c1 = c1; }
             }
             c1--;
-            printf("c1: %i, inc1idx: %i iOffset: %i.\n", c1, inc1idx, iOffsets[c1]);
+            printf("old_c1: %i, c1: %i, inc1idx: %i iOffset: %i.\n", old_c1, c1, inc1idx, iOffsets[c1]);
         }
-        data[i + iOffsets[c1 - 1]] = float(rand()) / RAND_MAX;
+        data[i + iOffsets[old_c1]] = float(rand()) / RAND_MAX;
     }
     NewData new_data;
     new_data.m = mNew;
@@ -99,19 +102,22 @@ NewData left_align_init(const int m, const int k, const int d, const int *inc1) 
     cudaMallocHost(&data, mNew * k * sizeof(float));
     // Fill in a new array
     c1 = 0;
+    int old_c1 = c1;
     inc1idx = 0;
     for (int i = 0; i < m; ++i) {
         if (i == inc1idx) {
+            old_c1 = c1;
             c1++;
             inc1idx = -1;
-            for (; c1 <= d && inc1idx <= 0; ++c1) {
+            for (; c1 < d && inc1idx <= 0; ++c1) {
                 inc1idx = inc1[c1];
+                if (inc1idx == 0) { old_c1 = c1; }
             }
             c1--;
             //printf("c1: %i, inc1idx: %i iOffset: %i.\n", c1, inc1idx, iOffsets[c1]);
         }
         for (int j = 0; j < k; ++j) {
-            data[(i + iOffsets[c1 - 1]) * k + j] = float(rand()) / RAND_MAX;
+            data[(i + iOffsets[old_c1]) * k + j] = float(rand()) / RAND_MAX;
         }
     }
     NewData new_data;
@@ -152,18 +158,21 @@ NewData right_align_init_1d(const int n, const int d, const int *inc2) {
     cudaMallocHost(&data, nNew * sizeof(float));
     // Fill in a new array
     c2 = 0;
+    int old_c2 = c2;
     inc2idx = 0;
     for (int j = 0; j < n; ++j) {
         if (j == inc2idx) {
+            old_c2 = c2;
             c2++;
             inc2idx = -1;
-            for (; c2 <= d && inc2idx <= 0; ++c2) {
+            for (; c2 < d && inc2idx <= 0; ++c2) {
                 inc2idx = inc2[c2];
+                if (inc2idx == 0) { old_c2 = c2; }
             }
             c2--;
             //printf("c2: %i, inc2idx: %i jOffset: %i.\n", c2, inc2idx, jOffsets[c2]);
         }
-        data[j + jOffsets[c2 - 1]] = float(rand()) / RAND_MAX;
+        data[j + jOffsets[old_c2]] = float(rand()) / RAND_MAX;
     }
     NewData new_data;
     new_data.n = nNew;
@@ -203,18 +212,21 @@ NewData right_align_init(const int k, const int n, const int d, const int *inc2)
     // Fill in a new array
     for (int i = 0; i < k; ++i) {
         c2 = 0;
+        int old_c2 = c2;
         inc2idx = 0;
         for (int j = 0; j < n; ++j) {
             if (j == inc2idx) {
+                old_c2 = c2;
                 c2++;
                 inc2idx = -1;
-                for (; c2 <= d && inc2idx <= 0; ++c2) {
+                for (; c2 < d && inc2idx <= 0; ++c2) {
                     inc2idx = inc2[c2];
+                    if (inc2idx == 0) { old_c2 = c2; }
                 }
                 c2--;
                 //printf("c2: %i, inc2idx: %i jOffset: %i.\n", c2, inc2idx, jOffsets[c2]);
             }
-            data[i * nNew + (j + jOffsets[c2 - 1])] = float(rand()) / RAND_MAX;
+            data[i * nNew + (j + jOffsets[old_c2])] = float(rand()) / RAND_MAX;
         }
     }
     NewData new_data;

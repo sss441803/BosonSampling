@@ -15,8 +15,14 @@ int main() {
     cudaMallocHost(&h_CR, n * sizeof(int));
 
     // Initialize random charge values. To see if the edge case of no charge value is 0 works, change the 0 of the lower bound to an integer value larger than 1.
-    random_init(h_CL, m, 0, d-1);
-    random_init(h_CR, n, 0, d-1);
+    random_init(h_CL, m, 2, d-1);
+    random_init(h_CR, n, 2, d-1);
+
+    for (int i = 0; i < m; ++i) {
+        if (h_CR[i] == 5) {
+            h_CR[i] = 6;
+        }
+    }
 
     int *d_CL, *d_CR;
     cudaMalloc(&d_CL, m * sizeof(int));
@@ -52,6 +58,10 @@ int main() {
     float* Gcr = Gcr_data.data;
 
     // Saving results to files
+    save((std::string)"../out/CL.npy", h_CL, m);
+    save((std::string)"../out/CR.npy", h_CR, n);
+    save((std::string)"../out/incL.npy", incL, d);
+    save((std::string)"../out/incR.npy", incR, d);
     save((std::string)"../out/LL.npy", LL, mNew);
     save((std::string)"../out/LR.npy", LR, nNew);
     save((std::string)"../out/Glc.npy", Glc, mNew, k);
