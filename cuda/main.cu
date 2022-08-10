@@ -1,19 +1,18 @@
-// How to compile: nvcc -o main main.cu ./src/kernel.cu ./src/DataInit.cu ./src/check.cu ./src/sort.cu -arch sm_50 -I ~/YHs_Sample/cnpy -I ./include -L/usr/local/lib -lcnpy
+// How to compile: nvcc -o test test.cu -arch sm_50 -I ~/YHs_Sample/cnpy -I ./ -L/usr/local/lib -lcnpy -lz
 #include <assert.h>
 
-#include <cnpy.h>
-
-#include <kernel.cuh>
-#include <check.cuh>
-#include <sort.cuh>
-#include <DataInit.cuh>
+#include <kernel.cuh> // Kernel
+#include <sort.cuh> // Sorting and index arrangement functions
+#include <DataInit.cuh> // Initialization of data arrays
+#include <check.cuh> // Checking the answer
+#include <save.cuh> // Saving data as numpy arrays
 
 int main() {
     unsigned int m;
     unsigned int n;
     unsigned int k;
-    unsigned int d = 20;
-    unsigned int tau = 10;
+    unsigned int d = 10;
+    unsigned int tau = 5;
     unsigned int n_iter = 1;
     bool chk = true;
 
@@ -61,7 +60,7 @@ int main() {
         SortedInfo sortedL = sort(d_CL, m);
         int* d_incL = sortedL.inc;
         int* d_idL = sortedL.id;
-        int* h_idL, *h_incL;
+        int *h_idL, *h_incL;
         cudaMallocHost(&h_idL, m * sizeof(int));
         cudaMallocHost(&h_incL, m * sizeof(int));
         cudaMemcpy(h_idL, d_idL, m * sizeof(int), cudaMemcpyDefault);
@@ -79,28 +78,11 @@ int main() {
         cudaMemcpy(d_incNewL, h_incNewL, d * sizeof(int), cudaMemcpyDefault);
         cudaMemcpy(d_cNewL, h_cNewL, sizeNewL * sizeof(int), cudaMemcpyDefault);
 
-        // Center
+        // Center (doesn't need to be aligned)
         // Sorting
         SortedInfo sortedC = sort(d_CC, n);
         int* d_incC = sortedC.inc;
         int* d_idC = sortedC.id;
-        int *h_idC, *h_incC;
-        cudaMallocHost(&h_idC, k * sizeof(int));
-        cudaMallocHost(&h_incC, k * sizeof(int));
-        cudaMemcpy(h_idC, d_idC, k * sizeof(int), cudaMemcpyDefault);
-        cudaMemcpy(h_incC, d_incC, k * sizeof(int), cudaMemcpyDefault);
-        // Reindexing
-        RemapInfo remapC = index_remapping(k, d, h_idC, h_incC);
-        unsigned int sizeNewC = remapC.size;
-        int* h_indexNewC = remapC.index;
-        int* h_incNewC = remapC.inc;
-        int* h_cNewC = remapC.c;
-        // Transfering to device
-        int *d_incNewC, *d_cNewC;
-        cudaMalloc(&d_incNewC, d * sizeof(int));
-        cudaMalloc(&d_cNewC, sizeNewC * sizeof(int));
-        cudaMemcpy(d_incNewC, h_incNewC, d * sizeof(int), cudaMemcpyDefault);
-        cudaMemcpy(d_cNewC, h_cNewC, sizeNewC * sizeof(int), cudaMemcpyDefault);
 
         // Right side
         // Sorting
@@ -172,13 +154,24 @@ int main() {
         dim3 grid((sizeNewR + 63) / 64, (sizeNewL + 127) / 128);
 
         // warmup
+        /*
+        d: Maximum number of photons. Local (mode) dimensionality of the Hilbert space
+        tau: the center charge.
+        U: Unitary
+        Glc: Gamma for left and center; Gcr: Gamma for center and right
+        LL: Lambda for left; LC: lambda for center; LR: lambda for right
+        cNewL: aligned charge for left; CC: sorted but unaligned charge for center; cNewR: aligned charge for right
+        incC: charge increment index for center
+        T: result theta matrix
+        sizeNewL: m dimension after alignment; sizeNewR: n dimension after alignment
+        */
         kernel<<<grid, 256>>>(
-            d, tau, d_U, d_Glc, d_Gcr, d_LL, d_LC, d_LR, d_cNewL, d_cNewC, d_cNewR, d_incC, d_T, sizeNewL, sizeNewR, k, k * sizeof(float), sizeNewR * sizeof(float) * 8);
+            d, tau, d_U, d_Glc, d_Gcr, d_LL, d_LC, d_LR, d_cNewL, d_CC, d_cNewR, d_incC, d_T, sizeNewL, sizeNewR, k, k * sizeof(float), sizeNewR * sizeof(float) * 8);
 
         cudaEventRecord(start);
         for (int i = 0; i < n_iter; ++i) {
             kernel<<<grid, 256>>>(
-                d, tau, d_U, d_Glc, d_Gcr, d_LL, d_LC, d_LR, d_cNewL, d_cNewC, d_cNewR, d_incC, d_T, sizeNewL, sizeNewR, k, k * sizeof(float), sizeNewR * sizeof(float) * 8);
+                d, tau, d_U, d_Glc, d_Gcr, d_LL, d_LC, d_LR, d_cNewL, d_CC, d_cNewR, d_incC, d_T, sizeNewL, sizeNewR, k, k * sizeof(float), sizeNewR * sizeof(float) * 8);
         }
         cudaEventRecord(end);
         cudaEventSynchronize(end);
@@ -205,13 +198,13 @@ int main() {
         chk = check(h_U, h_Glc, h_Gcr, h_LL, h_LC, h_LR, h_T, m, n, k); 
 
         //save results to file
-        cnpy::npy_save("U.npy", &h_U[0], {d, d, d }, "w");
-        cnpy::npy_save("A.npy", &h_Glc[0], {m, k}, "w");
-        cnpy::npy_save("B.npy", &h_Gcr[0], {k, n}, "w");
-        cnpy::npy_save("LL.npy", &h_LL[0], {m}, "w");
-        cnpy::npy_save("LC.npy", &h_LC[0], {k}, "w");
-        cnpy::npy_save("LR.npy", &h_LR[0], {n}, "w");
-        cnpy::npy_save("C.npy", &h_T[0], {m, n}, "w");
+        save((std::string)"./out/U.npy", h_U, d, d, d);
+        save((std::string)"./out/A.npy", h_Glc, m, k);
+        save((std::string)"./out/B.npy", h_Gcr, k, n);
+        save((std::string)"./out/LL.npy", h_LL, m);
+        save((std::string)"./out/LC.npy", h_LC, k);
+        save((std::string)"./out/LR.npy", h_LR, n);
+        save((std::string)"./out/C.npy", h_T, m, n);
 
         cudaFreeHost(h_U);
         cudaFreeHost(h_Glc);

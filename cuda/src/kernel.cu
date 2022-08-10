@@ -296,7 +296,11 @@ void kernel(const int d,
     // Load left and right charge values to register
     int m_idx = blockIdx.y * 128 + warp_id / 2 * 32 + mma_tid_y * 4;
     int n_idx = blockIdx.x * 64 + warp_id % 2 * 32 + mma_tid_x * 2;
-    int cl; int cr;
+    int cl[2]; int cr[2];
+    cl[0] = CL[m_idx];
+    cl[1] = CL[m_idx + 16];
+    cr[0] = CL[n_idx];
+    cr[1] = CL[n_idx + 16];
 
     // 1'st Glc & Gcr tile loaded before the k_tile loop
     uint32_t k_tiles = (k + 7) / 8 - 1;
@@ -374,9 +378,15 @@ void kernel(const int d,
     int incCidx = 0;
     int cc = 0;
     // Load the first value of U needed for the center charge cc
-    float u[2];
-    const char *U_ldg_ptr = (const char *)(U + (cl-tau)*d*d + (tau-cr)*d + (cl-cc));
-    ldg32_nc_0(u[0], U_ldg_ptr, true);
+    float u[2][2];
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            const char *U_ldg_ptr = (const char *)(U + (cl[i] - tau) * d * d + (tau - cr[j]) * d + (cl[i] - cc));
+            ldg32_nc_0(u[i][j], U_ldg_ptr, true);
+        }
+    }
+    
 
     // k_tiles loop
     for (int k_tile = k_tiles; k_tile > 0; --k_tile) {

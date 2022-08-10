@@ -23,22 +23,22 @@ NewData left_align_init_1d(const int m, const int d, const int *inc1) {
 
     // Finding the index offset needed for each charge value
     int iOffset = 0;
-    int inc1idx = 0;
+    int inc1idx = -1;
     int c1 = 0;
     int iOffsets[d] = { 0 };
     int new_inc1[d] = { 0 };
     while (c1 < d) {    
-        for (; c1 < d && inc1idx == 0; ++c1) {
+        for (; c1 < d && inc1idx == -1; ++c1) {
             inc1idx = inc1[c1];
             //printf("c1: %i, inc: %i.\n", c1, inc1idx);
         }
-        if (inc1idx == 0) { inc1idx = m; }
+        if (inc1idx == -1) { inc1idx = m; }
         int iOffsetAdd = (8 - (inc1idx + iOffset) % 8) % 8;
-        inc1idx = 0;
+        inc1idx = -1;
         iOffset += iOffsetAdd;
         iOffsets[c1-1] = iOffset;
         new_inc1[c1-1] = inc1[c1-1] + iOffset;
-        //printf("iOffset: %i.\n", iOffset);
+        printf("c1: %i, new_inc1: %i, iOffset: %i.\n", c1-1, new_inc1[c1-1], iOffsets[c1-1]);
     }
     // Dimension of the new array to store the data
     int mNew = (((m + iOffsets[d-1]) / 8) + 1) * 8;
@@ -53,12 +53,12 @@ NewData left_align_init_1d(const int m, const int d, const int *inc1) {
     for (int i = 0; i < m; ++i) {
         if (i == inc1idx) {
             c1++;
-            inc1idx = 0;
-            for (; c1 <= d && inc1idx == 0; ++c1) {
+            inc1idx = -1;
+            for (; c1 <= d && inc1idx <= 0; ++c1) {
                 inc1idx = inc1[c1];
             }
             c1--;
-            //printf("c1: %i, inc1idx: %i iOffset: %i.\n", c1, inc1idx, iOffsets[c1]);
+            printf("c1: %i, inc1idx: %i iOffset: %i.\n", c1, inc1idx, iOffsets[c1]);
         }
         data[i + iOffsets[c1 - 1]] = float(rand()) / RAND_MAX;
     }

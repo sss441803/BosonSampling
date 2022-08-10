@@ -13,6 +13,9 @@ void get_index(const int *charges, int *indices, const int size) {
     if (charge_idx < size -1) {
         int charge = charges[charge_idx];
         int next_charge = charges[charge_idx + 1];
+        if (charge_idx == 0) {
+            indices[charge] = 0;
+        }
         if (charge != next_charge) {
             indices[next_charge] = charge_idx + 1;
         }
@@ -22,6 +25,7 @@ void get_index(const int *charges, int *indices, const int size) {
 int* index_of_charge_increase(const int *charges, const int size) {
     int *inc;
     cudaMalloc(&inc, size * sizeof(int));
+    cudaMemset(inc, -1, size * sizeof(int));
     dim3 grid((size + 63) / 64);
     get_index<<<grid, 64>>>(charges, inc, size);
     return inc;
