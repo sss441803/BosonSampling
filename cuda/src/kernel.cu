@@ -220,15 +220,17 @@ void kernel(const int d,
      *     (uint32_t &)Gcr_smem ^= 0x0800;
      */
 
+// Shared memory declaration
     __shared__ __align__(16 * 1024) char smem[22 * 1024];
     float *Glc_smem = reinterpret_cast<float *>(smem);
     float *Gcr_smem = reinterpret_cast<float *>(smem + 16 * 1024);
     float *LC_smem = reinterpret_cast<float *>(smem + 20 * 1024);
     float *incC_smem = reinterpret_cast<float *>(smem + 21 * 1024);
 
-    // Glc, Gcr and T register fragment
+    // Glc, Gcr, U and T register fragment
     float Glc_frag[2][8];
     float Gcr_frag[2][4];
+    float U_frag[2][2];
     float T_frag[8][4];
     #pragma unroll
     for (int i = 0; i < 8; ++i) {
@@ -245,13 +247,31 @@ void kernel(const int d,
     const uint32_t mma_tid_x = (lane_id / 2) % 8;
     const uint32_t mma_tid_y = (lane_id / 16) * 2 + (lane_id % 2);
 
+    // Load left and right charge values to register
+    int m_idx = blockIdx.y * 128 + warp_id / 2 * 32 + mma_tid_y * 4;
+    int n_idx = blockIdx.x * 64 + warp_id % 2 * 32 + mma_tid_x * 2;
+    int cl[2]; int cr[2];
+    cl[0] = CL[m_idx];
+    cl[1] = CL[m_idx + 16];
+    cr[0] = CL[n_idx];
+    cr[1] = CL[n_idx + 16];
+
     // Glc_tile & Gcr_tile ldg (load from global) pointer
     const char *Glc_ldg_ptr = (const char *)(
         Glc + (blockIdx.y * 128 + threadIdx.x / 8 * 4) * k + threadIdx.x % 8); // 32 x 8
     const char *Gcr_ldg_ptr = (const char *)(
         Gcr + (threadIdx.x / 32) * n + blockIdx.x * 64 + threadIdx.x % 32); // 8 x 32
+    // Center Lambda and charge increment index ldg pointer
     const char *LC_ldg_ptr = (const char *)(LC + threadIdx.x);
     const char *incC_ldg_ptr = (const char *)(incC + threadIdx.x);
+    // U ldg pointer
+    const char *U_ldg_ptr[2][2];
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            U_ldg_ptr[i][j] = (const char *)(U + (cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i]);
+        }
+    }
 
     // Glc_tile & Gcr_tile sts/lds (set shared memory/load shared memory) pointer
     // using uint32_t pointer for faster double buffer switch
@@ -292,15 +312,6 @@ void kernel(const int d,
     float Gcr_ldg_reg[2];
     float LC_ldg_reg = 0;
     float incC_ldg_reg = 0;
-
-    // Load left and right charge values to register
-    int m_idx = blockIdx.y * 128 + warp_id / 2 * 32 + mma_tid_y * 4;
-    int n_idx = blockIdx.x * 64 + warp_id % 2 * 32 + mma_tid_x * 2;
-    int cl[2]; int cr[2];
-    cl[0] = CL[m_idx];
-    cl[1] = CL[m_idx + 16];
-    cr[0] = CL[n_idx];
-    cr[1] = CL[n_idx + 16];
 
     // 1'st Glc & Gcr tile loaded before the k_tile loop
     uint32_t k_tiles = (k + 7) / 8 - 1;
@@ -371,48 +382,42 @@ void kernel(const int d,
     *  |---|---|---|---|---|---|---|---|---|
     *  | 0 | 0 | 0 | 2 | 2 | 3 | 4 | 6 | 6 |  ...
     *  |---|---|---|---|---|---|---|---|---|
-    *  incC array
+    *  incC array: If no indices corresponds to a charge value, incC = -1 at that charge value
     *  |---|---|---|---|---|---|---|
-    *  | 0 | 0 | 3 | 5 | 6 | 0 | 8 | ...
+    *  | 0 |-1 | 3 | 5 | 6 |-1 | 8 | ...
     *  |---|---|---|---|---|---|---|            */
-    int incCidx = 0;
     int cc = 0;
-    // Load the first value of U needed for the center charge cc
-    float u[2][2];
-    #pragma unroll
-    for (int i = 0; i < 2; ++i) {
-        for (int j = 0; j < 2; ++j) {
-            const char *U_ldg_ptr = (const char *)(U + (cl[i] - tau) * d * d + (tau - cr[j]) * d + (cl[i] - cc));
-            ldg32_nc_0(u[i][j], U_ldg_ptr, true);
-        }
-    }
-    
+    int old_cc = cc;
+    int incCidx = 0;
 
     // k_tiles loop
     for (int k_tile = k_tiles; k_tile > 0; --k_tile) {
         #pragma unroll
         for (int k_frag = 0; k_frag < 8; ++k_frag) {
             if (k_tile < k_tiles || k_frag < first_k_tile){
-                // Load next 
+                // Load next center charge increment index
                 if (c == incCidx) {
+                    old_cc = cc;
                     cc++;
                     incCidx = -1;
-                    for (; cc <= d && incCidx <= 0; ++cc) {
+                    for (; cc < d && incCidx <= 0; ++cc) {
                         incCidx = incC[cc];
+                        if (incCidx == 0) { old_cc = cc; }
                     }
                     cc--;
-                    //printf("c1: %i, inc1idx: %i iOffset: %i.\n", c1, inc1idx, iOffsets[c1]);
+                    // Load needed U fragments
                     #pragma unroll
                     for (int i = 0; i < 2; ++i) {
                         for (int j = 0; j < 2; ++j) {
-                            const char *U_ldg_ptr = (const char *)(U + (cl[i] - tau) * d * d + (tau - cr[j]) * d + (cl[i] - (cc-1)));
-                            ldg32_nc_0(u[i][j], U_ldg_ptr, true);
+                            ldg32_nc_0(U_frag[i][j], U_ldg_ptr - old_cc * sizeof(float), true);
+                            __syncthreads();
                         }
                     }
                 }
                 // Increase c
                 c += 1;
                 c_rem += 1;
+                // Load center Lambda into shared memory every 256 index iterations
                 if (c_rem == 0) {
                     bool guard = threadIdx.x < (k - 256 * c/256);
                     ldg32_nc(LC_ldg_reg, LC_ldg_ptr + 256 * c/256 * sizeof(float), guard);
@@ -496,9 +501,30 @@ void kernel(const int d,
     // FFMA for the last tile
     #pragma unroll
     for (int k_frag = 0; k_frag < 8; ++k_frag) {
-
+        // Load next center charge increment index
+        if (c == incCidx) {
+            old_cc = cc;
+            cc++;
+            incCidx = -1;
+            for (; cc < d && incCidx <= 0; ++cc) {
+                incCidx = incC[cc];
+                if (incCidx == 0) { old_cc = cc; }
+            }
+            cc--;
+            // Load needed U fragments
+            #pragma unroll
+            for (int i = 0; i < 2; ++i) {
+                for (int j = 0; j < 2; ++j) {
+                    ldg32_nc_0(U_frag[i][j], U_ldg_ptr - old_cc * sizeof(float), true);
+                    __syncthreads();
+                }
+            }
+        }
+        // Increase c
         c += 1;
-        if (c % 256 == 0){
+        c_rem += 1;
+        // Load center Lambda into shared memory every 256 index iterations
+        if (c_rem == 0){
             bool guard = threadIdx.x < (k - 256 * c/256);
             ldg32_nc(LC_ldg_reg, LC_ldg_ptr + 256 * c/256 * sizeof(float), guard);
             sts32(LC_ldg_reg, LC_sts_addr);

@@ -38,7 +38,7 @@ NewData left_align_init_1d(const int m, const int d, const int *inc1) {
         iOffset += iOffsetAdd;
         iOffsets[c1-1] = iOffset;
         new_inc1[c1-1] = inc1[c1-1] + iOffset;
-        printf("c1: %i, new_inc1: %i, iOffset: %i.\n", c1-1, new_inc1[c1-1], iOffsets[c1-1]);
+        //printf("c1: %i, new_inc1: %i, iOffset: %i.\n", c1-1, new_inc1[c1-1], iOffsets[c1-1]);
     }
     // Dimension of the new array to store the data
     int mNew = (((m + iOffsets[d-1]) / 8) + 1) * 8;
@@ -61,7 +61,7 @@ NewData left_align_init_1d(const int m, const int d, const int *inc1) {
                 if (inc1idx == 0) { old_c1 = c1; }
             }
             c1--;
-            printf("old_c1: %i, c1: %i, inc1idx: %i iOffset: %i.\n", old_c1, c1, inc1idx, iOffsets[c1]);
+            //printf("old_c1: %i, c1: %i, inc1idx: %i iOffset: %i.\n", old_c1, c1, inc1idx, iOffsets[c1]);
         }
         data[i + iOffsets[old_c1]] = float(rand()) / RAND_MAX;
     }

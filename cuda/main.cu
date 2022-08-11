@@ -24,25 +24,24 @@ int main() {
         //////////////////////
         // Data preparation //
         //////////////////////
-        float *h_U, *h_T;
+        float *h_U;
         int *h_CL, *h_CC, *h_CR;
         cudaMallocHost(&h_U, d*d*d * sizeof(float));
         cudaMallocHost(&h_CL, m * sizeof(int));
         cudaMallocHost(&h_CC, k * sizeof(int));
         cudaMallocHost(&h_CR, n * sizeof(int));
-        cudaMallocHost(&h_T, m * n * sizeof(float));
         random_init(h_U, d*d*d);
-        random_init(h_CL, m, 0, d);
-        random_init(h_CC, k, 0, d);
-        random_init(h_CR, n, 0, d);
+        // Fill charges with random integers. A d dimensional Hilbert space has from 0 to d-1 charges possible.
+        random_init(h_CL, m, 0, d-1);
+        random_init(h_CC, k, 0, d-1);
+        random_init(h_CR, n, 0, d-1);
 
-        float *d_U, *d_T;
+        float *d_U;
         int *d_CL, *d_CC, *d_CR;
         cudaMalloc(&d_U, d*d*d * sizeof(float));
         cudaMalloc(&d_CL, m * sizeof(int));
         cudaMalloc(&d_CC, k * sizeof(int));
         cudaMalloc(&d_CR, n * sizeof(int));
-        cudaMalloc(&d_T, m * n * sizeof(float));
 
         cudaMemcpy(d_U, h_U, d*d*d * sizeof(float), cudaMemcpyDefault);
         cudaMemcpy(d_CL, h_CL, m * sizeof(int), cudaMemcpyDefault);
@@ -127,8 +126,9 @@ int main() {
         float* h_LR = LR_data.data;
         float* h_Glc = Glc_data.data;
         float* h_Gcr = Gcr_data.data;
-        //assert (sizeNewL == Glc_data.m);
-        //assert (sizeNewR == Gcr_data.n);
+        // Making sure remapping gives the same sizes as DataInit
+        assert (sizeNewL == Glc_data.m);
+        assert (sizeNewR == Gcr_data.n);
         // Moving lambdas and gammas to device
         float *d_LL, *d_LC, *d_LR, *d_Glc, *d_Gcr;
         cudaMalloc(&d_LL, sizeNewL * sizeof(float));
@@ -141,11 +141,14 @@ int main() {
         cudaMemcpy(d_LR, h_LR, sizeNewR * sizeof(float), cudaMemcpyDefault);
         cudaMemcpy(d_Glc, h_Glc, sizeNewL * k * sizeof(float), cudaMemcpyDefault);
         cudaMemcpy(d_Gcr, h_Gcr, k * sizeNewR * sizeof(float), cudaMemcpyDefault);
-        //cnpy::npy_save("Glc.npy", &h_Glc[0], {sizeNewL, k}, "w");
-        //cnpy::npy_save("Gcr.npy", &h_Gcr[0], {k, sizeNewR}, "w");
         ////////////////////////////////////////
         // End of Lambda Gamma initialization //
         ////////////////////////////////////////
+
+        // Initializing results array
+        float *h_T, *d_T;
+        cudaMallocHost(&h_T, sizeNewL * sizeNewR * sizeof(float));
+        cudaMalloc(&d_T, sizeNewL * sizeNewR * sizeof(float));
 
         cudaEvent_t start, end;
         cudaEventCreate(&start);
@@ -173,6 +176,7 @@ int main() {
             kernel<<<grid, 256>>>(
                 d, tau, d_U, d_Glc, d_Gcr, d_LL, d_LC, d_LR, d_cNewL, d_CC, d_cNewR, d_incC, d_T, sizeNewL, sizeNewR, k, k * sizeof(float), sizeNewR * sizeof(float) * 8);
         }
+
         cudaEventRecord(end);
         cudaEventSynchronize(end);
 
@@ -185,9 +189,9 @@ int main() {
         double gflops = (double(workload) / 1e9) / (double(ms) / 1e3);
         printf("Performance: %fGFLOPS; total time %fms\n", gflops, ms/n_iter);
 
-        cudaMemcpy(h_T, d_T, m * n * sizeof(float), cudaMemcpyDefault);
+        cudaMemcpy(h_T, d_T, sizeNewL * sizeNewR * sizeof(float), cudaMemcpyDefault);
 
-        cudaFree(d_U);
+        //cudaFree(d_U);
         cudaFree(d_Glc);
         cudaFree(d_Gcr);
         cudaFree(d_LL);
@@ -195,18 +199,19 @@ int main() {
         cudaFree(d_LR);
         cudaFree(d_T);
 
-        chk = check(h_U, h_Glc, h_Gcr, h_LL, h_LC, h_LR, h_T, m, n, k); 
+        //chk = check(h_U, h_Glc, h_Gcr, h_LL, h_LC, h_LR, h_T, sizeNewL, sizeNewR, k);
+        chk = check(h_Glc, h_Gcr, h_LL, h_LC, h_LR, h_T, sizeNewL, sizeNewR, k); 
 
         //save results to file
         save((std::string)"./out/U.npy", h_U, d, d, d);
-        save((std::string)"./out/A.npy", h_Glc, m, k);
-        save((std::string)"./out/B.npy", h_Gcr, k, n);
-        save((std::string)"./out/LL.npy", h_LL, m);
+        save((std::string)"./out/A.npy", h_Glc, sizeNewL, k);
+        save((std::string)"./out/B.npy", h_Gcr, k, sizeNewR);
+        save((std::string)"./out/LL.npy", h_LL, sizeNewL);
         save((std::string)"./out/LC.npy", h_LC, k);
-        save((std::string)"./out/LR.npy", h_LR, n);
-        save((std::string)"./out/C.npy", h_T, m, n);
+        save((std::string)"./out/LR.npy", h_LR, sizeNewR);
+        save((std::string)"./out/C.npy", h_T, sizeNewL, sizeNewR);
 
-        cudaFreeHost(h_U);
+        //cudaFreeHost(h_U);
         cudaFreeHost(h_Glc);
         cudaFreeHost(h_Gcr);
         cudaFreeHost(h_LL);

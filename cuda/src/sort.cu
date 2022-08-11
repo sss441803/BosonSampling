@@ -82,51 +82,49 @@ RemapInfo index_remapping(const int size, const int d, const int *index, const i
 
     // Finding the index offset needed for each charge value
     int Offset = 0;
-    int incIdx = 0;
+    int incidx = -1;
     int c = 0;
     int Offsets[d] = { 0 };
     int incNew[d] = { 0 };
-    int* cNew;
-    cudaMallocHost(&cNew, (size + d*8) * sizeof(float));
-    while (c <= d) {    
-        for (; c <= d && incIdx == 0; ++c) {
-            incIdx = inc[c];
-            //printf("c: %i, inc: %i.\n", c, incIdx);
+    while (c < d) {    
+        for (; c < d && incidx == -1; ++c) {
+            incidx = inc[c];
+            //printf("c: %i, inc: %i.\n", c, incidx);
         }
-        if (incIdx == 0) { incIdx = size; }
-        int OffsetAdd = (8 - (incIdx + Offset) % 8) % 8;
-        incIdx = 0;
+        if (incidx == -1) { incidx = size; }
+        int OffsetAdd = (8 - (incidx + Offset) % 8) % 8;
+        incidx = -1;
         Offset += OffsetAdd;
         Offsets[c-1] = Offset;
         incNew[c-1] = inc[c-1] + Offset;
-        for (int i = incNew[c - 2]; i < incNew[c - 1]; ++i) {
-            cNew[i] = c - 2;
-        }
-        //printf("Offset: %i.\n", Offset);
+        //printf("c: %i, new_inc: %i, iOffset: %i.\n", c-1, new_inc[c-1], iOffsets[c-1]);
     }
     // Dimension of the new array to store the data
     int sizeNew = (((size + Offsets[d-1]) / 8) + 1) * 8;
-    //printf("size: %i, Offset %i, sizeNew: %i.\n", size, Offsets[d-1], sizeNew);
-    for (int i = incNew[d]; i < sizeNew; ++i) {
-        cNew[i] = d;
-    }
+    // printf("m: %i, iOffset %i, mNew: %i.\n", m, iOffsets[d-1], mNew);
 
-    int* indexNew;
-    cudaMallocHost(&indexNew, sizeNew * sizeof(float));
+    // Create a new array to hold the data
+    int *cNew, *indexNew;
+    cudaMallocHost(&cNew, d * sizeof(int));
+    cudaMallocHost(&indexNew, sizeNew * sizeof(int));
+    // Fill in a new array
     c = 0;
-    incIdx = 0;
-    for (int i = 0; i < size; ++i) {
-        if (i == incIdx) {
+    int old_c = c;
+    incidx = 0;
+    for (int i = 0; i < sizeNew; ++i) {
+        if (i == incidx) {
+            old_c = c;
             c++;
-            incIdx = 0;
-            for (; c <= d + 1 && incIdx == 0; ++c) {
-                incIdx = inc[c];
+            incidx = -1;
+            for (; c < d && incidx <= 0; ++c) {
+                incidx = incNew[c];
+                if (incidx == 0) { old_c = c; }
             }
             c--;
-            //printf("c: %i, incIdx: %i Offset: %i.\n", c, incIdx, Offsets[c]);
+            //printf("old_c: %i, c: %i, incidx: %i iOffset: %i.\n", old_c, c, incidx, iOffsets[c]);
         }
-        //printf("index: %i\n", index[i]);
-        indexNew[i + Offsets[c - 1]] = index[i] + 1; // 0th entry is reserved for 0 values
+        cNew[i] = old_c;
+        indexNew[i + Offsets[old_c]] = index[i] + 1; // 0th entry is reserved for 0 values
     }
 
     RemapInfo remap_info;

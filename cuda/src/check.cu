@@ -2,7 +2,7 @@
 #include <cstdint>
 
 // Checking if GPU computed results agree with the CPU results
-bool check( const float *U,
+bool check( //const float *U,
             const float *A,
             const float *B,
             const float *LL,
@@ -11,8 +11,8 @@ bool check( const float *U,
             const float *C,
             int m, int n, int k) {
 
-    for (int i = m-1; i >= max(m-100,0); --i) {
-        for (int j = n-1; j >= max(n-100,0); --j) {
+    for (int i = m-1; i >= max(m-1000,0); --i) {
+        for (int j = n-1; j >= max(n-1000,0); --j) {
             float result = 0.f;
             for (int p = 0; p < k; ++p) {
                 result += A[i * k + p] * B[j + p * n] * LC[p];

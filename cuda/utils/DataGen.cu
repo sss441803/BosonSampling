@@ -5,7 +5,7 @@
 
 int main() {
     
-    unsigned int m = 100;
+    unsigned int m = 1000;
     unsigned int n = 100;
     unsigned int k = 100;
     unsigned int d = 10;
