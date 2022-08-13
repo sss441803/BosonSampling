@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <algorithm>
 
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
@@ -8,7 +9,7 @@
 
 // Obtain the indices of a sorted array where the entries increases. Used for charges.
 __global__
-void get_index(const int *charges, int *indices, const int size) {
+void get_index(const int size, const int *charges, int *indices) {
     int charge_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (charge_idx < size -1) {
         int charge = charges[charge_idx];
@@ -22,12 +23,12 @@ void get_index(const int *charges, int *indices, const int size) {
     }
 }
 
-int* index_of_charge_increase(const int *charges, const int size) {
+int* index_of_charge_increase(const int d, const int size, const int *charges) {
     int *inc;
-    cudaMalloc(&inc, size * sizeof(int));
-    cudaMemset(inc, -1, size * sizeof(int));
+    cudaMalloc(&inc, d * sizeof(int));
+    cudaMemset(inc, -1, d * sizeof(int));
     dim3 grid((size + 63) / 64);
-    get_index<<<grid, 64>>>(charges, inc, size);
+    get_index<<<grid, 64>>>(size, charges, inc);
     return inc;
 }
 
@@ -40,7 +41,7 @@ void sequence(int *indices, const int size) {
     }
 }
 
-SortedInfo sort(int *d_C, const int size) {
+SortedInfo sort(const int d, const int size, int *d_C) {
     // initialize array of indices
     int* d_id;
     cudaMalloc(&d_id, size * sizeof(int));
@@ -53,7 +54,7 @@ SortedInfo sort(int *d_C, const int size) {
     // Sorting charges. Reordering indices given the sort. (keys = charges)
     thrust::sort_by_key(thrust::device, t_C, t_C + size, t_id);
     // Obtaining indices of charge increases
-    int* inc = index_of_charge_increase(d_C, size);
+    int* inc = index_of_charge_increase(d, size, d_C);
     // // verification
     // int* h_C;
     // cudaMallocHost(&h_C, size * sizeof(int));
@@ -85,7 +86,8 @@ RemapInfo index_remapping(const int size, const int d, const int *index, const i
     int incidx = -1;
     int c = 0;
     int Offsets[d] = { 0 };
-    int incNew[d] = { 0 };
+    int incNew[d];
+    std::fill_n (incNew, d, -1);
     while (c < d) {    
         for (; c < d && incidx == -1; ++c) {
             incidx = inc[c];
@@ -96,7 +98,7 @@ RemapInfo index_remapping(const int size, const int d, const int *index, const i
         incidx = -1;
         Offset += OffsetAdd;
         Offsets[c-1] = Offset;
-        incNew[c-1] = inc[c-1] + Offset;
+        if (inc[c-1] != -1) { incNew[c-1] = inc[c-1] + Offset; }
         //printf("c: %i, new_inc: %i, iOffset: %i.\n", c-1, new_inc[c-1], iOffsets[c-1]);
     }
     // Dimension of the new array to store the data
@@ -105,9 +107,9 @@ RemapInfo index_remapping(const int size, const int d, const int *index, const i
 
     // Create a new array to hold the data
     int *cNew, *indexNew;
-    cudaMallocHost(&cNew, d * sizeof(int));
+    cudaMallocHost(&cNew, sizeNew * sizeof(int));
     cudaMallocHost(&indexNew, sizeNew * sizeof(int));
-    // Fill in a new array
+    // Fill in a new charge array
     c = 0;
     int old_c = c;
     incidx = 0;
@@ -124,6 +126,23 @@ RemapInfo index_remapping(const int size, const int d, const int *index, const i
             //printf("old_c: %i, c: %i, incidx: %i iOffset: %i.\n", old_c, c, incidx, iOffsets[c]);
         }
         cNew[i] = old_c;
+    }
+    // Fill in index mapping array
+    c = 0;
+    old_c = c;
+    incidx = 0;
+    for (int i = 0; i < size; ++i) {
+        if (i == incidx) {
+            old_c = c;
+            c++;
+            incidx = -1;
+            for (; c < d && incidx <= 0; ++c) {
+                incidx = inc[c];
+                if (incidx == 0) { old_c = c; }
+            }
+            c--;
+            //printf("old_c: %i, c: %i, incidx: %i iOffset: %i.\n", old_c, c, incidx, iOffsets[c]);
+        }
         indexNew[i + Offsets[old_c]] = index[i] + 1; // 0th entry is reserved for 0 values
     }
 

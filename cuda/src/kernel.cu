@@ -250,11 +250,13 @@ void kernel(const int d,
     // Load left and right charge values to register
     int m_idx = blockIdx.y * 128 + warp_id / 2 * 32 + mma_tid_y * 4;
     int n_idx = blockIdx.x * 64 + warp_id % 2 * 32 + mma_tid_x * 2;
-    int cl[2]; int cr[2];
+    int cl[2]; int cr[2] = {1, 4};
     cl[0] = CL[m_idx];
     cl[1] = CL[m_idx + 16];
-    cr[0] = CL[n_idx];
-    cr[1] = CL[n_idx + 16];
+    cr[0] = CR[n_idx];
+    //if (cr[0] == 0) { cr[0] = 1; }
+    cr[1] = CR[n_idx + 16];
+    //if (n_idx >= 16) { cr[1] = 33; }
 
     // Glc_tile & Gcr_tile ldg (load from global) pointer
     const char *Glc_ldg_ptr = (const char *)(
@@ -266,12 +268,12 @@ void kernel(const int d,
     const char *incC_ldg_ptr = (const char *)(incC + threadIdx.x);
     // U ldg pointer
     const char *U_ldg_ptr[2][2];
-    #pragma unroll
-    for (int i = 0; i < 2; ++i) {
-        for (int j = 0; j < 2; ++j) {
-            U_ldg_ptr[i][j] = (const char *)(U + (cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i]);
-        }
-    }
+    // #pragma unroll
+    // for (int i = 0; i < 2; ++i) {
+    //     for (int j = 0; j < 2; ++j) {
+    //         U_ldg_ptr[i][j] = (const char *)(U + (cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i]);
+    //     }
+    // }
 
     // Glc_tile & Gcr_tile sts/lds (set shared memory/load shared memory) pointer
     // using uint32_t pointer for faster double buffer switch
@@ -409,7 +411,7 @@ void kernel(const int d,
                     #pragma unroll
                     for (int i = 0; i < 2; ++i) {
                         for (int j = 0; j < 2; ++j) {
-                            ldg32_nc_0(U_frag[i][j], U_ldg_ptr - old_cc * sizeof(float), true);
+                            //ldg32_nc(U_frag[i][j], U_ldg_ptr[i][j] - old_cc * sizeof(float), cl[i] >= cc && cl[i] >= tau && tau >= cr[j]);
                             __syncthreads();
                         }
                     }
@@ -489,7 +491,8 @@ void kernel(const int d,
                 for (int i = 0; i < 8; ++i) {
                     #pragma unroll
                     for (int j = 0; j < 4; ++j) {
-                        T_frag[i][j] += Glc_frag[k_frag % 2][i] *
+                        T_frag[i][j] += //U_frag[i / 4][j / 2] *
+                                        Glc_frag[k_frag % 2][i] *
                                         Gcr_frag[k_frag % 2][j] *
                                         lc[k_frag % 2];
                     }
@@ -498,6 +501,7 @@ void kernel(const int d,
         }
     }
 
+    int cr_old = cr[1];
     // FFMA for the last tile
     #pragma unroll
     for (int k_frag = 0; k_frag < 8; ++k_frag) {
@@ -515,10 +519,20 @@ void kernel(const int d,
             #pragma unroll
             for (int i = 0; i < 2; ++i) {
                 for (int j = 0; j < 2; ++j) {
-                    ldg32_nc_0(U_frag[i][j], U_ldg_ptr - old_cc * sizeof(float), true);
-                    __syncthreads();
+                    if (cl[i] >= old_cc) {
+                        U_frag[i][j] = cr[j] + 0.01;//U[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
+                        __syncthreads();
+                    }
                 }
             }
+        }
+        if (cr_old != cr[1]) {U_frag[0][1] = 55; break;}
+        cr_old = cr[1];
+        //if (c == 8) { U_frag[0][0] = U_frag[0][1] = U_frag[1][0] = U_frag[1][0] = old_cc; __syncthreads(); }
+        for (int i = 0; i < 2; ++i) {
+                for (int j = 0; j < 2; ++j) {
+                    U_frag[i][j] = cr[j];
+                }
         }
         // Increase c
         c += 1;
@@ -557,9 +571,14 @@ void kernel(const int d,
         for (int i = 0; i < 8; ++i) {
             #pragma unroll
             for (int j = 0; j < 4; ++j) {
-                T_frag[i][j] += Glc_frag[k_frag % 2][i] *
-                                Gcr_frag[k_frag % 2][j] *
-                                lc[k_frag % 2];
+                // if (U_frag[i / 4][j / 2] < 0.0001) {
+                //     U_frag[i / 4][j / 2] = 10000;
+                // }
+                // T_frag[i][j] += //U_frag[i / 4][j / 2] *
+                //                 Glc_frag[k_frag % 2][i] *
+                //                 Gcr_frag[k_frag % 2][j] *
+                //                 lc[k_frag % 2];
+                T_frag[i][j] = U_frag[i / 4][j / 2];
             }
         }
     }
@@ -582,14 +601,14 @@ void kernel(const int d,
         }
     }
     // Multiply accumulator by lambda values
-    #pragma unroll
-    for (int i = 0; i < 8; ++i) {
-        #pragma unroll
-        for (int j = 0; j < 4; ++j) {
-            T_frag[i][j] *= Glc_frag[0][i] *
-                            Gcr_frag[0][j];
-        }
-    }
+    // #pragma unroll
+    // for (int i = 0; i < 8; ++i) {
+    //     #pragma unroll
+    //     for (int j = 0; j < 4; ++j) {
+    //         T_frag[i][j] *= Glc_frag[0][i] *
+    //                         Gcr_frag[0][j];
+    //     }
+    // }
 
     // T_tile write back, reuse Glc&Gcr tile shared memory buffer
     uint32_t T_sts_addr = smem_u32addr((float2 *)(smem + warp_id * 1024) +

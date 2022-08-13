@@ -11,15 +11,16 @@ int main() {
     unsigned int m;
     unsigned int n;
     unsigned int k;
-    unsigned int d = 10;
-    unsigned int tau = 5;
+    unsigned int d = 5;
+    unsigned int tau = 2;
+    assert (d >= tau);
     unsigned int n_iter = 1;
     bool chk = true;
 
     for (int i = 0; i < 100 && chk; i += 100){
-        m = 1000 + i;
-        n = 1000 + i;
-        k = 1000 + i;
+        m = 5 + i;
+        n = 5 + i;
+        k = 8 + i;
 
         //////////////////////
         // Data preparation //
@@ -32,9 +33,9 @@ int main() {
         cudaMallocHost(&h_CR, n * sizeof(int));
         random_init(h_U, d*d*d);
         // Fill charges with random integers. A d dimensional Hilbert space has from 0 to d-1 charges possible.
-        random_init(h_CL, m, 0, d-1);
-        random_init(h_CC, k, 0, d-1);
-        random_init(h_CR, n, 0, d-1);
+        random_init(h_CL, m, tau, d-1);
+        random_init(h_CC, k, 0, tau);
+        random_init(h_CR, n, 0, tau);
 
         float *d_U;
         int *d_CL, *d_CC, *d_CR;
@@ -56,7 +57,7 @@ int main() {
         //////////////////////////////////////////////////////////////////////////////////////////
         // Left side
         // Sorting
-        SortedInfo sortedL = sort(d_CL, m);
+        SortedInfo sortedL = sort(d, m, d_CL);
         int* d_incL = sortedL.inc;
         int* d_idL = sortedL.id;
         int *h_idL, *h_incL;
@@ -79,13 +80,14 @@ int main() {
 
         // Center (doesn't need to be aligned)
         // Sorting
-        SortedInfo sortedC = sort(d_CC, n);
+        SortedInfo sortedC = sort(d, k, d_CC);
+        cudaMemcpy(h_CC, d_CC, k * sizeof(int), cudaMemcpyDefault);
         int* d_incC = sortedC.inc;
         int* d_idC = sortedC.id;
 
         // Right side
         // Sorting
-        SortedInfo sortedR = sort(d_CR, n);
+        SortedInfo sortedR = sort(d, n, d_CR);
         int* d_incR = sortedR.inc;
         int* d_idR = sortedR.id;
         int *h_idR, *h_incR;
@@ -94,7 +96,7 @@ int main() {
         cudaMemcpy(h_idR, d_idR, n * sizeof(int), cudaMemcpyDefault);
         cudaMemcpy(h_incR, d_incR, n * sizeof(int), cudaMemcpyDefault);
         // Reindexing
-        RemapInfo remapR = index_remapping(m, d, h_idR, h_incR);
+        RemapInfo remapR = index_remapping(n, d, h_idR, h_incR);
         unsigned int sizeNewR = remapR.size;
         int* h_indexNewR = remapR.index;
         int* h_incNewR = remapR.inc;
@@ -191,7 +193,7 @@ int main() {
 
         cudaMemcpy(h_T, d_T, sizeNewL * sizeNewR * sizeof(float), cudaMemcpyDefault);
 
-        //cudaFree(d_U);
+        cudaFree(d_U);
         cudaFree(d_Glc);
         cudaFree(d_Gcr);
         cudaFree(d_LL);
@@ -200,18 +202,21 @@ int main() {
         cudaFree(d_T);
 
         //chk = check(h_U, h_Glc, h_Gcr, h_LL, h_LC, h_LR, h_T, sizeNewL, sizeNewR, k);
-        chk = check(h_Glc, h_Gcr, h_LL, h_LC, h_LR, h_T, sizeNewL, sizeNewR, k); 
+        chk = check(h_T, d, tau, h_U, h_Glc, h_Gcr, h_LL, h_LC, h_LR, h_cNewL, h_CC, h_cNewR, sizeNewL, sizeNewR, k); 
 
         //save results to file
         save((std::string)"./out/U.npy", h_U, d, d, d);
-        save((std::string)"./out/A.npy", h_Glc, sizeNewL, k);
-        save((std::string)"./out/B.npy", h_Gcr, k, sizeNewR);
+        save((std::string)"./out/Glc.npy", h_Glc, sizeNewL, k);
+        save((std::string)"./out/Gcr.npy", h_Gcr, k, sizeNewR);
         save((std::string)"./out/LL.npy", h_LL, sizeNewL);
         save((std::string)"./out/LC.npy", h_LC, k);
         save((std::string)"./out/LR.npy", h_LR, sizeNewR);
-        save((std::string)"./out/C.npy", h_T, sizeNewL, sizeNewR);
+        save((std::string)"./out/CL.npy", h_cNewL, sizeNewL);
+        save((std::string)"./out/CC.npy", h_CC, k);
+        save((std::string)"./out/CR.npy", h_cNewR, sizeNewR);
+        save((std::string)"./out/T.npy", h_T, sizeNewL, sizeNewR);
 
-        //cudaFreeHost(h_U);
+        cudaFreeHost(h_U);
         cudaFreeHost(h_Glc);
         cudaFreeHost(h_Gcr);
         cudaFreeHost(h_LL);
