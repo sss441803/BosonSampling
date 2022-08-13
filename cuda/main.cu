@@ -1,5 +1,6 @@
 // How to compile: nvcc -o test test.cu -arch sm_50 -I ~/YHs_Sample/cnpy -I ./ -L/usr/local/lib -lcnpy -lz
 #include <assert.h>
+#include <cstdio>
 
 #include <kernel.cuh> // Kernel
 #include <sort.cuh> // Sorting and index arrangement functions
@@ -12,15 +13,20 @@ int main() {
     unsigned int n;
     unsigned int k;
     unsigned int d = 5;
-    unsigned int tau = 2;
+    unsigned int tau = d/2;
     assert (d >= tau);
     unsigned int n_iter = 1;
     bool chk = true;
 
-    for (int i = 0; i < 100 && chk; i += 100){
-        m = 5 + i;
-        n = 5 + i;
-        k = 8 + i;
+    for (int i = 0; i < 4000 && chk; i += 100) {
+        m = 1000 + i;
+        n = 1007 + i;
+        k = 1073 + i;
+
+        d = m/100;
+        tau = d/2;
+
+        printf("\nm: %i, n: %i, k: %i, d: %i, tau: %i\n", m, n, k, d, tau);
 
         //////////////////////
         // Data preparation //
@@ -64,7 +70,7 @@ int main() {
         cudaMallocHost(&h_idL, m * sizeof(int));
         cudaMallocHost(&h_incL, m * sizeof(int));
         cudaMemcpy(h_idL, d_idL, m * sizeof(int), cudaMemcpyDefault);
-        cudaMemcpy(h_incL, d_incL, m * sizeof(int), cudaMemcpyDefault);
+        cudaMemcpy(h_incL, d_incL, d * sizeof(int), cudaMemcpyDefault);
         // Reindexing
         RemapInfo remapL = index_remapping(m, d, h_idL, h_incL);
         unsigned int sizeNewL = remapL.size;
@@ -94,7 +100,7 @@ int main() {
         cudaMallocHost(&h_idR, n * sizeof(int));
         cudaMallocHost(&h_incR, n * sizeof(int));
         cudaMemcpy(h_idR, d_idR, n * sizeof(int), cudaMemcpyDefault);
-        cudaMemcpy(h_incR, d_incR, n * sizeof(int), cudaMemcpyDefault);
+        cudaMemcpy(h_incR, d_incR, d * sizeof(int), cudaMemcpyDefault);
         // Reindexing
         RemapInfo remapR = index_remapping(n, d, h_idR, h_incR);
         unsigned int sizeNewR = remapR.size;
@@ -193,12 +199,27 @@ int main() {
 
         cudaMemcpy(h_T, d_T, sizeNewL * sizeNewR * sizeof(float), cudaMemcpyDefault);
 
+        cudaFree(d_CL);
+        cudaFree(d_CC);
+        cudaFree(d_CR);
+        cudaFree(d_idL);
+        cudaFree(d_idC);
+        cudaFree(d_idR);
+        cudaFree(d_incL);
+        cudaFree(d_incR);
+        cudaFree(d_incNewL);
+        cudaFree(d_incNewR);
+
         cudaFree(d_U);
         cudaFree(d_Glc);
         cudaFree(d_Gcr);
         cudaFree(d_LL);
         cudaFree(d_LC);
         cudaFree(d_LR);
+        cudaFree(d_cNewL);
+        cudaFree(d_CC);
+        cudaFree(d_cNewR);
+        cudaFree(d_incC);
         cudaFree(d_T);
 
         //chk = check(h_U, h_Glc, h_Gcr, h_LL, h_LC, h_LR, h_T, sizeNewL, sizeNewR, k);
@@ -216,12 +237,25 @@ int main() {
         save((std::string)"./out/CR.npy", h_cNewR, sizeNewR);
         save((std::string)"./out/T.npy", h_T, sizeNewL, sizeNewR);
 
+        cudaFreeHost(h_CL);
+        cudaFreeHost(h_CC);
+        cudaFreeHost(h_CR);
+        cudaFreeHost(h_idL);
+        cudaFreeHost(h_idR);
+        cudaFreeHost(h_incL);
+        cudaFreeHost(h_incR);
+        cudaFreeHost(h_incNewL);
+        cudaFreeHost(h_incNewR);
+
         cudaFreeHost(h_U);
         cudaFreeHost(h_Glc);
         cudaFreeHost(h_Gcr);
         cudaFreeHost(h_LL);
         cudaFreeHost(h_LC);
         cudaFreeHost(h_LR);
+        cudaFreeHost(h_cNewL);
+        cudaFreeHost(h_CC);
+        cudaFreeHost(h_cNewR);
         cudaFreeHost(h_T);
     }
 }

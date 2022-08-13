@@ -9,7 +9,7 @@
 # NVCC compiler options:
 NVCC=nvcc
 
-NVCC_FLAGS= -arch compute_50 -code sm_50 -g -G
+NVCC_FLAGS= -arch compute_50 -code sm_50# -g -G
 
 ##########################################################
 
