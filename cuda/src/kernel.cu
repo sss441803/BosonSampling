@@ -416,7 +416,10 @@ void kernel(const int d,
                     #pragma unroll
                     for (int i = 0; i < 2; ++i) {
                         for (int j = 0; j < 2; ++j) {
-                            U_frag[i][j] = U[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
+                            if (cl[i] >= old_cc && old_cc >= cr[j]) {
+                                U_frag[i][j] = U[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
+                            }
+                            else { U_frag[i][j] = 0; }
                         }
                     }
                     __syncthreads();
@@ -523,8 +526,10 @@ void kernel(const int d,
             #pragma unroll
             for (int i = 0; i < 2; ++i) {
                 for (int j = 0; j < 2; ++j) {
-                    U_frag[i][j] = U[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
-                    __syncthreads();
+                    if (cl[i] >= old_cc && old_cc >= cr[j]) {
+                       U_frag[i][j] = U[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
+                    }
+                    else { U_frag[i][j] = 0; }
                 }
             }
         }

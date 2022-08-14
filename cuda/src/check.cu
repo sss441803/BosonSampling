@@ -30,7 +30,7 @@ bool check( const float *T,
             for (int p = 0; p < k; ++p) {
                 cc = CC[p];
                 u = U[(cl - tau) * d * d + (tau - cr) * d + cl - cc];
-                if (cl >= cc && cl >= tau && tau >= cr) { u = u; }
+                if (cl >= cc && cc >= cr) { u = u; }
                 else { u = 0; }
                 glc = Glc[i * k + p];
                 gcr = Gcr[j + p * n];

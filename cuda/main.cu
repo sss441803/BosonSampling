@@ -18,10 +18,10 @@ int main() {
     unsigned int n_iter = 1;
     bool chk = true;
 
-    for (int i = 0; i < 4000 && chk; i += 100) {
-        m = 1000 + i;
-        n = 1007 + i;
-        k = 1073 + i;
+    for (int i = 0; i < 100 && chk; i += 100) {
+        m = 5000 + i;
+        n = 5007 + i;
+        k = 5000 + i;
 
         d = m/100;
         tau = d/2;
