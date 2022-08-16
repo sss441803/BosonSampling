@@ -19,9 +19,9 @@ int main() {
     bool chk = true;
 
     for (int i = 0; i < 100 && chk; i += 100) {
-        m = 5000 + i;
-        n = 5007 + i;
-        k = 5000 + i;
+        m = 1000 + i;
+        n = 1007 + i;
+        k = 1000 + i;
 
         d = m/100;
         tau = d/2;
@@ -40,7 +40,7 @@ int main() {
         random_init(h_U, d*d*d);
         // Fill charges with random integers. A d dimensional Hilbert space has from 0 to d-1 charges possible.
         random_init(h_CL, m, tau, d-1);
-        random_init(h_CC, k, 0, tau);
+        random_init(h_CC, k, 0, d-1);
         random_init(h_CR, n, 0, tau);
 
         float *d_U;
@@ -90,6 +90,9 @@ int main() {
         cudaMemcpy(h_CC, d_CC, k * sizeof(int), cudaMemcpyDefault);
         int* d_incC = sortedC.inc;
         int* d_idC = sortedC.id;
+        int* h_incC;
+        cudaMallocHost(&h_incC, d * sizeof(int));
+        cudaMemcpy(h_incC, d_incC, d * sizeof(int), cudaMemcpyDefault);
 
         // Right side
         // Sorting
@@ -235,6 +238,7 @@ int main() {
         save((std::string)"./out/CL.npy", h_cNewL, sizeNewL);
         save((std::string)"./out/CC.npy", h_CC, k);
         save((std::string)"./out/CR.npy", h_cNewR, sizeNewR);
+        save((std::string)"./out/incC.npy", h_incC, d);
         save((std::string)"./out/T.npy", h_T, sizeNewL, sizeNewR);
 
         cudaFreeHost(h_CL);
@@ -243,6 +247,7 @@ int main() {
         cudaFreeHost(h_idL);
         cudaFreeHost(h_idR);
         cudaFreeHost(h_incL);
+        cudaFreeHost(h_incC);
         cudaFreeHost(h_incR);
         cudaFreeHost(h_incNewL);
         cudaFreeHost(h_incNewR);
