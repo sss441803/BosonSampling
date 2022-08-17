@@ -85,24 +85,31 @@ RemapInfo index_remapping(const int size, const int d, const int *index, const i
     int Offset = 0;
     int incidx = -1;
     int c = 0;
+    int old_c = c;
     int Offsets[d] = { 0 };
     int incNew[d];
     std::fill_n (incNew, d, -1);
     while (c < d) {    
+
+        old_c = c;
+
         for (; c < d && incidx == -1; ++c) {
             incidx = inc[c];
+            if (incidx == 0) { old_c = c; }
             //printf("c: %i, inc: %i.\n", c, incidx);
         }
+
         if (incidx == -1) { incidx = size; }
+
         int OffsetAdd = (8 - (incidx + Offset) % 8) % 8;
         incidx = -1;
         Offset += OffsetAdd;
-        Offsets[c-1] = Offset;
-        if (inc[c-1] != -1) { incNew[c-1] = inc[c-1] + Offset; }
+        Offsets[old_c] = Offset;
+        if (inc[old_c] != -1) { incNew[old_c] = inc[old_c] + Offset; }
         //printf("c: %i, new_inc: %i, iOffset: %i.\n", c-1, new_inc[c-1], iOffsets[c-1]);
     }
     // Dimension of the new array to store the data
-    int sizeNew = (((size + Offsets[d-1]) / 8) + 1) * 8;
+    int sizeNew = ((size + Offsets[d-1] + 7) / 8) * 8;
     // printf("m: %i, iOffset %i, mNew: %i.\n", m, iOffsets[d-1], mNew);
 
     // Create a new array to hold the data
@@ -111,7 +118,7 @@ RemapInfo index_remapping(const int size, const int d, const int *index, const i
     cudaMallocHost(&indexNew, sizeNew * sizeof(int));
     // Fill in a new charge array
     c = 0;
-    int old_c = c;
+    old_c = c;
     incidx = 0;
     for (int i = 0; i < sizeNew; ++i) {
         if (i == incidx) {

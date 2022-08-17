@@ -25,9 +25,11 @@ NewData left_align_init_1d(const int m, const int d, const int *inc1) {
     int iOffset = 0;
     int inc1idx = -1;
     int c1 = 0;
+    int old_c1 = c1;
     int iOffsets[d] = { 0 };
     int new_inc1[d] = { 0 };
-    while (c1 < d) {    
+    while (c1 < d) { 
+        old_c1 = c1;
         for (; c1 < d && inc1idx == -1; ++c1) {
             inc1idx = inc1[c1];
             //printf("c1: %i, inc: %i.\n", c1, inc1idx);
@@ -37,11 +39,11 @@ NewData left_align_init_1d(const int m, const int d, const int *inc1) {
         inc1idx = -1;
         iOffset += iOffsetAdd;
         iOffsets[c1-1] = iOffset;
-        new_inc1[c1-1] = inc1[c1-1] + iOffset;
-        //printf("c1: %i, new_inc1: %i, iOffset: %i.\n", c1-1, new_inc1[c1-1], iOffsets[c1-1]);
+        if (inc1[old_c1] != -1) { new_inc1[old_c1] = inc1[old_c1] + iOffset; }
+        //printf("iOffset: %i.\n", iOffset);
     }
     // Dimension of the new array to store the data
-    int mNew = (((m + iOffsets[d-1]) / 8) + 1) * 8;
+    int mNew = ((m + iOffsets[d-1] + 7) / 8) * 8;
     // printf("m: %i, iOffset %i, mNew: %i.\n", m, iOffsets[d-1], mNew);
 
     // Create a new array to hold the data
@@ -49,7 +51,7 @@ NewData left_align_init_1d(const int m, const int d, const int *inc1) {
     cudaMallocHost(&data, mNew * sizeof(float));
     // Fill in a new array
     c1 = 0;
-    int old_c1 = c1;
+    old_c1 = c1;
     inc1idx = 0;
     for (int i = 0; i < m; ++i) {
         if (i == inc1idx) {
@@ -78,9 +80,11 @@ NewData left_align_init(const int m, const int k, const int d, const int *inc1) 
     int iOffset = 0;
     int inc1idx = -1;
     int c1 = 0;
+    int old_c1 = c1;
     int iOffsets[d] = { 0 };
     int new_inc1[d] = { 0 };
-    while (c1 < d) {    
+    while (c1 < d) { 
+        old_c1 = c1;
         for (; c1 < d && inc1idx == -1; ++c1) {
             inc1idx = inc1[c1];
             //printf("c1: %i, inc: %i.\n", c1, inc1idx);
@@ -90,11 +94,11 @@ NewData left_align_init(const int m, const int k, const int d, const int *inc1) 
         inc1idx = -1;
         iOffset += iOffsetAdd;
         iOffsets[c1-1] = iOffset;
-        new_inc1[c1-1] = inc1[c1-1] + iOffset;
+        if (inc1[old_c1] != -1) { new_inc1[old_c1] = inc1[old_c1] + iOffset; }
         //printf("iOffset: %i.\n", iOffset);
     }
     // Dimension of the new array to store the data
-    int mNew = (((m + iOffsets[d-1]) / 8) + 1) * 8;
+    int mNew = ((m + iOffsets[d-1] + 7) / 8) * 8;
     // printf("m: %i, iOffset %i, mNew: %i.\n", m, iOffsets[d-1], mNew);
 
     // Create a new array to hold the data
@@ -102,7 +106,7 @@ NewData left_align_init(const int m, const int k, const int d, const int *inc1) 
     cudaMallocHost(&data, mNew * k * sizeof(float));
     // Fill in a new array
     c1 = 0;
-    int old_c1 = c1;
+    old_c1 = c1;
     inc1idx = 0;
     for (int i = 0; i < m; ++i) {
         if (i == inc1idx) {
@@ -134,9 +138,11 @@ NewData right_align_init_1d(const int n, const int d, const int *inc2) {
     int jOffset = 0;
     int inc2idx = -1;
     int c2 = 0;
+    int old_c2 = c2;
     int jOffsets[d] = { 0 };
     int new_inc2[d] = { 0 };
     while (c2 < d) {
+        old_c2 = c2;
         for (; c2 < d && inc2idx == -1; ++c2) {
             inc2idx = inc2[c2];
             //printf("c2: %i, inc: %i.\n", c2, inc2idx);
@@ -145,12 +151,12 @@ NewData right_align_init_1d(const int n, const int d, const int *inc2) {
         int jOffsetAdd = (8 - (inc2idx + jOffset) % 8) % 8;
         inc2idx = -1;
         jOffset += jOffsetAdd;
-        jOffsets[c2-1] = jOffset;
-        new_inc2[c2-1] = inc2[c2-1] + jOffset;
+        jOffsets[old_c2] = jOffset;
+        if (inc2[old_c2] != -1) { new_inc2[old_c2] = inc2[old_c2] + jOffset; }
         //printf("jOffset: %i.\n", jOffset);
     }
     // Dimension of the new array to store the data
-    int nNew = (((n + jOffsets[d-1]) / 8) + 1) * 8;
+    int nNew = ((n + jOffsets[d-1]+ 7) / 8) * 8;
     //printf("n: %i, jOffset %i, nNew: %i.\n", n, jOffsets[d-1], nNew);
 
     // Create a new array to hold the data
@@ -158,7 +164,7 @@ NewData right_align_init_1d(const int n, const int d, const int *inc2) {
     cudaMallocHost(&data, nNew * sizeof(float));
     // Fill in a new array
     c2 = 0;
-    int old_c2 = c2;
+    old_c2 = c2;
     inc2idx = 0;
     for (int j = 0; j < n; ++j) {
         if (j == inc2idx) {
@@ -187,9 +193,11 @@ NewData right_align_init(const int k, const int n, const int d, const int *inc2)
     int jOffset = 0;
     int inc2idx = -1;
     int c2 = 0;
+    int old_c2 = c2;
     int jOffsets[d] = { 0 };
     int new_inc2[d] = { 0 };
     while (c2 < d) {
+        old_c2 = c2;
         for (; c2 < d && inc2idx == -1; ++c2) {
             inc2idx = inc2[c2];
             //printf("c2: %i, inc: %i.\n", c2, inc2idx);
@@ -198,12 +206,12 @@ NewData right_align_init(const int k, const int n, const int d, const int *inc2)
         int jOffsetAdd = (8 - (inc2idx + jOffset) % 8) % 8;
         inc2idx = -1;
         jOffset += jOffsetAdd;
-        jOffsets[c2-1] = jOffset;
-        new_inc2[c2-1] = inc2[c2-1] + jOffset;
+        jOffsets[old_c2] = jOffset;
+        if (inc2[old_c2] != -1) { new_inc2[old_c2] = inc2[old_c2] + jOffset; }
         //printf("jOffset: %i.\n", jOffset);
     }
     // Dimension of the new array to store the data
-    int nNew = (((n + jOffsets[d-1]) / 8) + 1) * 8;
+    int nNew = ((n + jOffsets[d-1] + 7) / 8) * 8;
     //printf("n: %i, jOffset %i, nNew: %i.\n", n, jOffsets[d-1], nNew);
 
     // Create a new array to hold the data
@@ -212,7 +220,7 @@ NewData right_align_init(const int k, const int n, const int d, const int *inc2)
     // Fill in a new array
     for (int i = 0; i < k; ++i) {
         c2 = 0;
-        int old_c2 = c2;
+        old_c2 = c2;
         inc2idx = 0;
         for (int j = 0; j < n; ++j) {
             if (j == inc2idx) {
