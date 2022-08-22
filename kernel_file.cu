@@ -189,7 +189,7 @@ void sts128(const float &reg0, const float &reg1,
  *    |---|     |-------------------------------||-------------------------------|
  *
  */
-__global__ __launch_bounds__(256, 2)
+extern "C" __global__ __launch_bounds__(256, 2)
 void kernel(const int d,
             const int tau,
             const float *U,
@@ -384,7 +384,7 @@ void kernel(const int d,
     uint8_t c_rem = 0;
     float lc[2];
     lds32(lc[0], LC_lds_addr);
-    // Load U
+        // Load U
     #pragma unroll
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {

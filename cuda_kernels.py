@@ -4,7 +4,6 @@ import numpy as np
 from math import sqrt, ceil, pi
 from cmath import exp
 
-
 # CUDA kernel for updating unitary
 unitary = cp.RawKernel(r'''
 
@@ -111,8 +110,94 @@ def Rand_U(d: int, r: float, BS):
     unitary(blockspergrid, threadsperblock, (d, t, r, BS))
 
 
+
 # CUDA kernel for computing the Theta matrix (to be SVDed) for updating the MPS upon application of the unitary
-update = cp.RawKernel(r'''
+# Load kernel file
+kernel_file = open('kernel_file.cu')
+kernel_string = kernel_file.read()
+kernel_file.close()
+# Definition of the kernel
+update = cp.RawKernel(kernel_string, 'kernel', backend='nvcc')
+
+def update_MPS(d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC):
+    # idx_c = cp.argsort(CC)
+    # CC = cp.take(CC, idx_c, axis = 0)
+    # Glc = cp.take(Glc, idx_c, axis = 1)
+    # LC = cp.take(LC, idx_c, axis = 0)
+    # Gcr = cp.take(Gcr, idx_c, axis = 0)
+    # U = U.reshape(-1)
+    # Glc = Glc.reshape(-1)
+    # Gcr = Gcr.reshape(-1)
+    U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC = map(cp.ascontiguousarray, [U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC])
+
+    len_l = LL.shape[0]
+    len_c = LC.shape[0]
+    len_r = LR.shape[0]
+    grid = ((len_r + 63) // 64, (len_l + 127) // 128, 1)
+    T = cp.zeros(len_l * len_r, dtype = np.float32)
+    update(grid, (256, 1, 1), (d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC, T, len_l, len_r, len_c, int(len_c * 4), int(len_r * 32)))
+    return T.reshape(len_l, len_r)
+
+
+data_type = np.float32
+
+if __name__ == '__main__':
+
+    import time
+
+    T = np.load('cuda/out/T.npy')
+    incC = np.load('cuda/out/incC.npy')
+    U = np.load('cuda/out/U.npy')
+    CL = np.load('cuda/out/CL.npy')
+    CC = np.load('cuda/out/CC.npy')
+    CR = np.load('cuda/out/CR.npy')
+    Glc = np.load('cuda/out/Glc.npy')
+    Gcr = np.load('cuda/out/Gcr.npy')
+    LL = np.load('cuda/out/LL.npy')
+    LC = np.load('cuda/out/LC.npy')
+    LR = np.load('cuda/out/LR.npy')
+
+    T = cp.array(T, dtype = data_type)
+    incC = cp.array(incC, dtype = np.int32)
+    U = cp.array(U, dtype = data_type)
+    CL = cp.array(CL, dtype = np.int32)
+    CC = cp.array(CC, dtype = np.int32)
+    CR = cp.array(CR, dtype = np.int32)
+    Glc = cp.array(Glc, dtype = data_type)
+    Gcr = cp.array(Gcr, dtype = data_type)
+    LL = cp.array(LL, dtype = data_type)
+    LC = cp.array(LC, dtype = data_type)
+    LR = cp.array(LR, dtype = data_type)
+
+    d = incC.shape[0]
+    tau = d // 2
+
+    print("d: {}, tau: {}, T shape: {}.".format(d, tau, T.shape))
+
+    cpT = update_MPS(d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC)
+    print(cpT[0, 0])
+    start = time.time()
+    cpT = update_MPS(d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC)
+    print(cpT[0, 0])
+    print("Time per kernel: ", time.time() - start)
+
+    print("Results agree? ", cp.allclose(cpT, T))
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+r'''
 #include <cuComplex.h>
 
 typedef cuDoubleComplex ctype;
@@ -153,22 +238,4 @@ void update(const int tau, const int d, const int chi, int* l_bond, int* c_bond,
         }
     }
 }
-''',
-'update', backend='nvcc', translate_cucomplex=True)
-
-def update_MPS(tau, d, chi, l_bond, c_bond, r_bond, bc_l, bc_c, bc_r, C, BS, Lambda_l, Gamma_lc, Lambda_c, Gamma_cr, Lambda_r):
-    
-    len_l = l_bond.shape[0]
-    len_c = c_bond.shape[0]
-    len_r = r_bond.shape[0]
-    
-    threadsperblock = (8, 8, 8)
-    bpgx = ceil(len_l/8)
-    bpgy = ceil(len_c/8)
-    bpgz = ceil(len_r/8)
-    blockspergrid = (bpgx, bpgy, bpgz)
-    #print(blockspergrid)
-    
-    update(blockspergrid, threadsperblock, (tau, d, chi, l_bond, c_bond, r_bond, len_l, len_c, len_r, bc_l, bc_c, bc_r, C, BS, Lambda_l, Gamma_lc, Lambda_c, Gamma_cr, Lambda_r))
-
-    #return C
+'''
