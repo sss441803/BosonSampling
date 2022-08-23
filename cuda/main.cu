@@ -18,17 +18,17 @@ int main() {
     unsigned int n_iter = 1;
     bool chk = true;
 
-    for (int i = 0; i < 300 && chk; i += 3) {
-        m = 5000 + i;
+    for (int i = 0; i < 3 && chk; i += 3) {
+        m = 20 + i;
 
-        for (int j = 0; j < 300; j += 3) {
-            n = 5000 + j;
-            d = min(m, n)/100 + 1;
+        for (int j = 0; j < 3; j += 3) {
+            n = 20 + j;
+            d = min(m, n)/4 + 1;
             tau = d/2;
             printf("\nm: %i, n: %i, d: %i, tau: %i\n", m, n, d, tau);
 
             for (int l = 0; l < 3; l += 3) {
-                k = 5000 + l;
+                k = 500 + l;
 
                 //////////////////////
                 // Data preparation //

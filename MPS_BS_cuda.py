@@ -53,8 +53,9 @@ def loop(d, tau, U, CL, CC, CR, LL, Glc, LC, Gcr, LR):
     return T
 
 
-data_type = cp.float32
+data_type = np.complex64
 float_type = np.float32
+int_type = np.int32
 
 
 class MPS:
@@ -67,13 +68,13 @@ class MPS:
         self.TotalProbPar = np.zeros([n])
         self.SingleProbPar = np.zeros([n])
         self.EEPar = np.zeros([n - 1,n])
-        self.REPar = np.zeros([n - 1, n, 1], dtype = 'float32')
+        self.REPar = np.zeros([n - 1, n, 1], dtype=data_type)
         
     def MPSInitialization(self):
         self.dGamma = cp.zeros([self.n, self.chi, self.chi], dtype=data_type); # modes, alpha, alpha
         self.dLambda = cp.zeros([self.n - 1, self.chi], dtype=float_type); # modes - 1, alpha
         self.dLambda_edge = cp.ones(self.chi, dtype=float_type) # edge lambda (for first and last site) don't exists and are ones
-        self.dcharge = self.d * cp.ones([self.n + 1, self.chi], dtype=np.int32) # Initialize initial charges for all bonds to the impossible charge d.
+        self.dcharge = self.d * cp.ones([self.n + 1, self.chi], dtype=int_type) # Initialize initial charges for all bonds to the impossible charge d.
         
         # Initialize the first bond
         # At the beginning, only the first bond is initialized to non-trivial information
@@ -111,11 +112,9 @@ class MPS:
     #MPO update after a two-qudit gate        
     def MPStwoqubitUpdateDevice(self, l, r, seed):
         
+        # Initializing unitary matrix on GPU
         cp.random.seed(seed)
-        # U = cp.zeros(self.d**3, dtype=data_type)
-        # Rand_U(self.d, r, U)
-        # U = U.reshape(self.d, self.d, self.d)
-        U = cp.random.rand(self.d, self.d, self.d, dtype=cp.float32)
+        U = Rand_U(self.d, r)
 
         # Determining the location of the two qubit gate
         left = "Left"
@@ -155,8 +154,8 @@ class MPS:
         # Storage of generated data
         new_Gamma_L = []
         new_Gamma_R = []
-        new_Lambda = cp.array([], dtype=float)
-        new_charge = cp.array([], dtype=int)
+        new_Lambda = cp.array([], dtype=float_type)
+        new_charge = cp.array([], dtype=int_type)
         tau_array = [0]
 
         for tau in range(self.d):
@@ -178,7 +177,7 @@ class MPS:
             #cpuT = loop(self, tau, U, cl, cc, cr, ll, glc, lc, gcr, lr)
             #T = cp.array(cpuT)
             T = update_MPS(self.d, tau, U, glc, gcr, ll, lc, lr, cl, cc, cr, incC)
-            #print('cpuT: ', cpuT)
+            print('T: ', T)
             # De-align (compact) T
             T = aligner.compact_data(True, 'T', T, min_charge_l, max_charge_l, min_charge_r, max_charge_r)
             
@@ -190,7 +189,7 @@ class MPS:
             new_Gamma_L = new_Gamma_L + [V[:, i] for i in range(len(Lambda))]
             new_Gamma_R = new_Gamma_R + [W[i, :] for i in range(len(Lambda))]
             new_Lambda = cp.append(new_Lambda, Lambda)
-            new_charge = cp.append(new_charge, cp.repeat(cp.array(tau, dtype=int), len(Lambda)))
+            new_charge = cp.append(new_charge, cp.repeat(cp.array(tau, dtype=int_type), len(Lambda)))
             tau_array.append(len(Lambda))
         
         # Number of singular values to save
@@ -199,7 +198,7 @@ class MPS:
         if num_lambda!= 0:
             idx_select = cp.argpartition(new_Lambda, -num_lambda)[-num_lambda:] # Indices of the largest num_lambda singular values
         else:
-            idx_select = cp.array([], dtype=int)
+            idx_select = cp.array([], dtype=int_type)
         
         # Initialize selected and sorted Gamma outputs
         Gamma1Out = cp.zeros([self.chi, self.chi], dtype = data_type)
@@ -392,7 +391,7 @@ class my_pdf(rv_continuous):
 my_cv = my_pdf(a = 0, b = 1, name='my_pdf')
 
 if __name__ == "__main__":
-    m_array = [6]#, 4, 6 ,8, 10, 12, 14, 16, 18, 20];
+    m_array = [2]#, 4, 6 ,8, 10, 12, 14, 16, 18, 20];
     EE_tot = []
     for m in m_array:
         start = time.time()

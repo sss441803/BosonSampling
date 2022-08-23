@@ -7,6 +7,7 @@ class Aligner(object):
     def __init__(self, d: int, chi: int, CL: np.ndarray, CC: np.ndarray, CR: np.ndarray) -> None:
         self.d = d
         self.chi = chi
+
         self.CL = CL
         self.CC = CC
         self.CR = CR
@@ -28,14 +29,18 @@ class Aligner(object):
             backend = np
         else:
             raise TypeError("Data is not numpy or cupy array.")
+        # idxNew makes aligned array by taking elemets from the original array.
+        # Because it has to fill in empty spaces with 0, we decide to use index 0 for
+        # filling 0 and the rest of the indices are increased by 1. Hence we are appending
+        # a 0 to the beginning of the original array before indexing.
         if array_type in ['ll','Ll','LL']:
-            return backend.append(np.float32(0), data)[self.idxNewL]
+            return backend.append(np.zeros(1, dtype=data.dtype), data)[self.idxNewL]
         elif array_type in ['lr','Lr','LR']:
-            return backend.append(np.float32(0), data)[self.idxNewR]
+            return backend.append(np.zeros(1, dtype=data.dtype), data)[self.idxNewR]
         elif array_type in ['glc','Glc','GLC']:
-            return backend.vstack( [backend.zeros(self.chi, dtype=np.float32), data] )[self.idxNewL]
+            return backend.vstack( [backend.zeros(self.chi, dtype=data.dtype), data] )[self.idxNewL]
         elif array_type in ['gcr','Gcr','GCR']:
-            return backend.hstack( [backend.zeros([self.chi, 1], dtype=np.float32), data] )[:, self.idxNewR]
+            return backend.hstack( [backend.zeros([self.chi, 1], dtype=data.dtype), data] )[:, self.idxNewR]
 
     
     # Compact (de-align) given data
@@ -163,7 +168,7 @@ class Aligner(object):
     def get_charge_beginning_index(d: int, charges: np.ndarray):
 
         size = charges.shape[0]
-        inc = - np.ones(d + 1, dtype=np.int32) # Includes terminating charge value d.
+        inc = - np.ones(d + 1, dtype=charges.dtype) # Includes terminating charge value d.
         inc[d] = size # Initialize terminating charge increment index as the full size
 
         for charge_idx in range(size - 1):
@@ -185,15 +190,15 @@ class Aligner(object):
     def align_info(chi: int, inc: np.ndarray):
 
         d = inc.shape[0] - 1
-        linear_indices = np.arange(chi, dtype = np.int32)
+        linear_indices = np.arange(chi, dtype=inc.dtype)
 
         # Finding the index offset needed for each charge value
         Offset = int(0)
         incidx = int(-1)
         c = int(0)
         old_c = c
-        Offsets = np.zeros(d + 1, dtype=np.int32)
-        incNew = - np.ones(d + 1, dtype=np.int32)
+        Offsets = np.zeros(d + 1, dtype=inc.dtype)
+        incNew = - np.ones(d + 1, dtype=inc.dtype)
         
         while (c <= d):
 
@@ -222,9 +227,9 @@ class Aligner(object):
         sizeNew = int(((chi + Offsets[old_c] + 7) // 8) * 8)
 
         # Create a new array to hold the data
-        cNew = np.zeros(sizeNew, dtype=np.int32)
-        idxNew = np.zeros(sizeNew, dtype=np.int32)
-        idxInv = np.zeros(chi, dtype=np.int32)
+        cNew = np.zeros(sizeNew, dtype=inc.dtype)
+        idxNew = np.zeros(sizeNew, dtype=inc.dtype)
+        idxInv = np.zeros(chi, dtype=inc.dtype)
 
         # Fill in a new charge array
         c = 0

@@ -6,8 +6,12 @@ import time
 data_type = np.complex64
 float_type = np.float32
 
+np.set_printoptions(precision=3)
 
 def numpy(d, tau, U, CL, CC, CR, LL, Glc, LC, Gcr, LR):
+
+    if type(U) is not np.ndarray:
+        U, CL, CC, CR, LL, Glc, LC, Gcr, LR = map(cp.asnumpy, [U, CL, CC, CR, LL, Glc, LC, Gcr, LR])
 
     len_l, len_r = CL.shape[0], CR.shape[0]
     T = np.zeros([len_l, len_r], dtype = data_type)
@@ -107,55 +111,102 @@ kernel_file.close()
 update = cp.RawKernel(kernel_string, 'kernel', backend='nvcc')
 
 def update_MPS(d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC):
-    # idx_c = cp.argsort(CC)
-    # CC = cp.take(CC, idx_c, axis = 0)
-    # Glc = cp.take(Glc, idx_c, axis = 1)
-    # LC = cp.take(LC, idx_c, axis = 0)
-    # Gcr = cp.take(Gcr, idx_c, axis = 0)
-    # U = U.reshape(-1)
-    # Glc = Glc.reshape(-1)
-    # Gcr = Gcr.reshape(-1)
+
+    U_r = cp.array(cp.real(U), np.float32)
+    U_i = cp.array(cp.imag(U), np.float32)
+    Glc_r = cp.array(cp.real(Glc), np.float32)
+    Glc_i = cp.array(cp.imag(Glc), np.float32)
+    Gcr_r = cp.array(cp.real(Gcr), np.float32)
+    Gcr_i = cp.array(cp.imag(Gcr), np.float32)
+
     len_l = LL.shape[0]
     len_c = LC.shape[0]
     len_r = LR.shape[0]
+    print(len_l, len_c, len_r)
     grid = ((len_r + 63) // 64, (len_l + 127) // 128, 1)
-    T = cp.zeros(len_l * len_r, dtype = np.float32)
-    update(grid, (256, 1, 1), (d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC, T, len_l, len_r, len_c, int(len_c * 4), int(len_r * 32)))
-    return T.reshape(len_l, len_r)
+    t_r = cp.zeros(len_l * len_r, dtype = np.float32)
+    t_i = cp.zeros(len_l * len_r, dtype = np.float32)
+    update(grid, (256, 1, 1), (d, tau, U_r, U_i, Glc_r, Glc_i, Gcr_r, Gcr_i, LL, LC, LR, CL, CC, CR, incC, t_r, t_i, len_l, len_r, len_c, int(len_c * 4), int(len_r * 32)))
+
+    return (t_r + 1j*t_i).reshape(len_l, len_r)
+
+# T = np.load('../out/T_r.npy') + 1j*np.load('../out/T_i.npy')
+# incC = np.load('../out/incC.npy')
+# U = np.load('../out/U_r.npy') + 1j*np.load('../out/U_i.npy')
+# CL = np.load('../out/CL.npy')
+# CC = np.load('../out/CC.npy')
+# CR = np.load('../out/CR.npy')
+# Glc = np.load('../out/Glc_r.npy') + 1j*np.load('../out/Glc_i.npy')
+# Gcr = np.load('../out/Gcr_r.npy') + 1j*np.load('../out/Gcr_i.npy')
+# LL = np.load('../out/LL.npy')
+# LC = np.load('../out/LC.npy')
+# LR = np.load('../out/LR.npy')
+
+# T = np.array(T, dtype = data_type)
+# incC = np.array(incC, dtype = np.int32)
+# U = np.array(U, dtype = data_type)
+# CL = np.array(CL, dtype = np.int32)
+# CC = np.array(CC, dtype = np.int32)
+# CR = np.array(CR, dtype = np.int32)
+# Glc = np.array(Glc, dtype = data_type)
+# Gcr = np.array(Gcr, dtype = data_type)
+# LL = np.array(LL, dtype = float_type)
+# LC = np.array(LC, dtype = float_type)
+# LR = np.array(LR, dtype = float_type)
+
+# T_r = cp.load('../out/T_r.npy')
+# T_i = cp.load('../out/T_i.npy')
+# T = T_r + 1j*T_i
+cp.random.seed(1)
+incC = cp.load('../out/incC.npy')
+U_r = cp.random.rand(*cp.load('../out/U_r.npy').shape, dtype=np.float32)
+U_i = cp.random.rand(*cp.load('../out/U_i.npy').shape, dtype=np.float32)
+U = U_r + 1j*U_i
+CL = cp.load('../out/CL.npy')
+CC = cp.load('../out/CC.npy')
+CR = cp.load('../out/CR.npy')
+Glc_r = cp.random.rand(*cp.load('../out/Glc_r.npy').shape, dtype=np.float32)
+Glc_i = cp.random.rand(*cp.load('../out/Glc_i.npy').shape, dtype=np.float32)
+Glc = Glc_r + 1j*Glc_i
+Gcr_r = cp.random.rand(*cp.load('../out/Gcr_r.npy').shape, dtype=np.float32)
+Gcr_i = cp.random.rand(*cp.load('../out/Gcr_i.npy').shape, dtype=np.float32)
+Gcr = Gcr_r + 1j*Gcr_i
+LL = cp.random.rand(*cp.load('../out/LL.npy').shape, dtype=np.float32)
+LC = cp.random.rand(*cp.load('../out/LC.npy').shape, dtype=np.float32)
+LR = cp.random.rand(*cp.load('../out/LR.npy').shape, dtype=np.float32)
 
 
-T = np.load('../out/T_r.npy') + 1j*np.load('../out/T_i.npy')
-incC = np.load('../out/incC.npy')
-U = np.load('../out/U_r.npy') + 1j*np.load('../out/U_i.npy')
-CL = np.load('../out/CL.npy')
-CC = np.load('../out/CC.npy')
-CR = np.load('../out/CR.npy')
-Glc = np.load('../out/Glc_r.npy') + 1j*np.load('../out/Glc_i.npy')
-Gcr = np.load('../out/Gcr_r.npy') + 1j*np.load('../out/Gcr_i.npy')
-LL = np.load('../out/LL.npy')
-LC = np.load('../out/LC.npy')
-LR = np.load('../out/LR.npy')
 
-T = np.array(T, dtype = data_type)
-incC = np.array(incC, dtype = np.int32)
-U = np.array(U, dtype = data_type)
-CL = np.array(CL, dtype = np.int32)
-CC = np.array(CC, dtype = np.int32)
-CR = np.array(CR, dtype = np.int32)
-Glc = np.array(Glc, dtype = data_type)
-Gcr = np.array(Gcr, dtype = data_type)
-LL = np.array(LL, dtype = float_type)
-LC = np.array(LC, dtype = float_type)
-LR = np.array(LR, dtype = float_type)
 
 d = incC.shape[0]
 tau = d // 2
+print(d, tau)
 
-start = time.time()
-numpy_T = numpy(d, tau, U, CL, CC, CR, LL, Glc, LC, Gcr, LR)
-print(numpy_T)
-print('numpy: ', time.time() - start)
-print('all close? ', np.allclose(numpy_T, T))
+
+
+
+# def cupy(d, tau, U_r, U_i, Glc_r, Glc_i, Gcr_r, Gcr_i, LL, LC, LR, CL, CC, CR, incC):
+
+#     len_l = LL.shape[0]
+#     len_c = LC.shape[0]
+#     len_r = LR.shape[0]
+#     print(len_l, len_c, len_r)
+#     grid = ((len_r + 63) // 64, (len_l + 127) // 128, 1)
+#     t_r = cp.zeros(len_l * len_r, dtype = np.float32)
+#     t_i = cp.zeros(len_l * len_r, dtype = np.float32)
+#     update(grid, (256, 1, 1), (d, tau, U_r, U_i, Glc_r, Glc_i, Gcr_r, Gcr_i, LL, LC, LR, CL, CC, CR, incC, t_r, t_i, len_l, len_r, len_c, int(len_c * 4), int(len_r * 32)))
+#     print((t_r + 1j*t_i).reshape(len_l, len_r)[1])
+#     return (t_r + 1j*t_i).reshape(len_l, len_r)
+
+
+
+cupy_T = update_MPS(d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC)
+
+# start = time.time()
+T = numpy(d, tau, U, CL, CC, CR, LL, Glc, LC, Gcr, LR)
+# print(numpy_T)
+# print('numpy: ', time.time() - start)
+# print('all close? ', np.allclose(numpy_T, T))
 # U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC = map(cp.array, [U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC])
 # U = cp.random.rand(2, 2, 2)
 # d = 2
@@ -170,7 +221,8 @@ print('all close? ', np.allclose(numpy_T, T))
 # CR = cp.array([0,0,0,0,0,0,0,0])
 # incC = cp.array([0,-1])
 
-# cupy_T = update_MPS(d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC)
+#cupy_T = update_MPS(d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC)
+#print('Reference T real: ', np.real(T))
 # U, CL, CC, CR, LL, Glc, LC, Gcr, LR = map(cp.asnumpy, [U, CL, CC, CR, LL, Glc, LC, Gcr, LR])
 # numpy_T = numpy(d, tau, U, CL, CC, CR, LL, Glc, LC, Gcr, LR)
 
@@ -212,5 +264,5 @@ print('all close? ', np.allclose(numpy_T, T))
 # print('Numpy results: ', numpy_T)
 # # print('Loop results: ', loop_T)
 # print(np.allclose(T, numpy_T, rtol=1e-05, atol=1e-08, equal_nan=False))
-# print(np.allclose(cupy_T, numpy_T, rtol=1e-05, atol=1e-08, equal_nan=False))
-# print(np.max(np.abs(cp.asnumpy(cupy_T)- numpy_T)))
+print(np.allclose(cupy_T, T, rtol=1e-05, atol=1e-08, equal_nan=False))
+print(np.max(np.abs(cp.asnumpy(cupy_T) - T)))

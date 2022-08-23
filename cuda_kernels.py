@@ -100,14 +100,17 @@ extern "C" __global__ void unitary(const int d, const ctype t, const ctype r, ct
 'unitary', backend='nvcc', translate_cucomplex=True)
 
 # Function generating random unitary on CUDA
-def Rand_U(d: int, r: float, BS):
+def Rand_U(d: int, r: float):
+    U = cp.zeros([d, d, d], dtype=np.complex64)
     t = sqrt(1 - r ** 2) * exp(1j * np.random.rand() * 2 * pi)
     r = r * exp(1j * np.random.rand() * 2 * pi)
     threadsperblock = (8, 8, 8)
     bpg = ceil(d/8)
     blockspergrid = (bpg, bpg, bpg)
     # Memory holder for the Unitaries
-    unitary(blockspergrid, threadsperblock, (d, t, r, BS))
+    unitary(blockspergrid, threadsperblock, (d, t, r, U))
+    
+    return U.reshape(d, d, d)
 
 
 
@@ -120,23 +123,23 @@ kernel_file.close()
 update = cp.RawKernel(kernel_string, 'kernel', backend='nvcc')
 
 def update_MPS(d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC):
-    # idx_c = cp.argsort(CC)
-    # CC = cp.take(CC, idx_c, axis = 0)
-    # Glc = cp.take(Glc, idx_c, axis = 1)
-    # LC = cp.take(LC, idx_c, axis = 0)
-    # Gcr = cp.take(Gcr, idx_c, axis = 0)
-    # U = U.reshape(-1)
-    # Glc = Glc.reshape(-1)
-    # Gcr = Gcr.reshape(-1)
-    U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC = map(cp.ascontiguousarray, [U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC])
+
+    U_r = cp.array(cp.real(U), np.float32)
+    U_i = cp.array(cp.imag(U), np.float32)
+    Glc_r = cp.array(cp.real(Glc), np.float32)
+    Glc_i = cp.array(cp.imag(Glc), np.float32)
+    Gcr_r = cp.array(cp.real(Gcr), np.float32)
+    Gcr_i = cp.array(cp.imag(Gcr), np.float32)
 
     len_l = LL.shape[0]
     len_c = LC.shape[0]
     len_r = LR.shape[0]
     grid = ((len_r + 63) // 64, (len_l + 127) // 128, 1)
-    T = cp.zeros(len_l * len_r, dtype = np.float32)
-    update(grid, (256, 1, 1), (d, tau, U, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC, T, len_l, len_r, len_c, int(len_c * 4), int(len_r * 32)))
-    return T.reshape(len_l, len_r)
+    T_r = cp.zeros(len_l * len_r, dtype = np.float32)
+    T_i = cp.zeros(len_l * len_r, dtype = np.float32)
+    update(grid, (256, 1, 1), (d, tau, U_r, U_i, Glc_r, Glc_i, Gcr_r, Gcr_i, LL, LC, LR, CL, CC, CR, incC, T_r, T_i, len_l, len_r, len_c, int(len_c * 4), int(len_r * 32)))
+
+    return (T_r + 1j*T_i).reshape(len_l, len_r)
 
 
 data_type = np.float32
