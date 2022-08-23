@@ -189,12 +189,16 @@ void sts128(const float &reg0, const float &reg1,
  *    |---|     |-------------------------------||-------------------------------|
  *
  */
+// CUDA kernel
 __global__ __launch_bounds__(256, 2)
 void kernel(const int d,
             const int tau,
-            const float *U,
-            const float *Glc,
-            const float *Gcr,
+            const float *U_r,
+            const float *U_i,
+            const float *Glc_r,
+            const float *Glc_i,
+            const float *Gcr_r,
+            const float *Gcr_i,
             const float *LL,
             const float *LC,
             const float *LR,
@@ -202,7 +206,8 @@ void kernel(const int d,
             const int *CC,
             const int *CR,
             const int *incC,
-            float *T,
+            float *T_r,
+            float *T_i,
             uint32_t m,
             uint32_t n,
             uint32_t k,
@@ -221,29 +226,37 @@ void kernel(const int d,
      */
 
 // Shared memory declaration
-    __shared__ __align__(16 * 1024) char smem[22 * 1024];
-    float *Glc_smem = reinterpret_cast<float *>(smem);
-    float *Gcr_smem = reinterpret_cast<float *>(smem + 16 * 1024);
-    float *LC_smem = reinterpret_cast<float *>(smem + 20 * 1024);
-    float *incC_smem = reinterpret_cast<float *>(smem + 21 * 1024);
+    __shared__ __align__(32 * 1024) char smem[42 * 1024];
+    float *Glc_r_smem = reinterpret_cast<float *>(smem);
+    float *Glc_i_smem = reinterpret_cast<float *>(smem + 16 * 1024);
+    float *Gcr_r_smem = reinterpret_cast<float *>(smem + 32 * 1024);
+    float *Gcr_i_smem = reinterpret_cast<float *>(smem + 36 * 1024);
+    float *LC_smem = reinterpret_cast<float *>(smem + 40 * 1024);
+    float *incC_smem = reinterpret_cast<float *>(smem + 41 * 1024);
 
     // Glc, Gcr, U and T register fragment
-    float Glc_frag[2][8];
-    float Gcr_frag[2][4];
-    float U_frag[2][2];
-    float T_frag[8][4];
+    float Glc_r_frag[2][8];
+    float Glc_i_frag[2][8];
+    float Gcr_r_frag[2][4];
+    float Gcr_i_frag[2][4];
+    float U_r_frag[2][2];
+    float U_i_frag[2][2];
+    float T_r_frag[8][4];
+    float T_i_frag[8][4];
     #pragma unroll
     for (int i = 0; i < 2; ++i) {
         #pragma unroll
         for (int j = 0; j < 2; ++j) {
-            U_frag[i][j] = 0;
+            U_r_frag[i][j] = 0;
+            U_i_frag[i][j] = 0;
         }
     }
     #pragma unroll
     for (int i = 0; i < 8; ++i) {
         #pragma unroll
         for (int j = 0; j < 4; ++j) {
-            T_frag[i][j] = 0;
+            T_r_frag[i][j] = 0;
+            T_i_frag[i][j] = 0;
         }
     }
 
@@ -263,36 +276,40 @@ void kernel(const int d,
     cr[0] = CR[n_idx];
     cr[1] = CR[n_idx + 16];
 
-    // Glc_tile & Gcr_tile ldg (load from global) pointer
-    const char *Glc_ldg_ptr = (const char *)(
-        Glc + (blockIdx.y * 128 + threadIdx.x / 8 * 4) * k + threadIdx.x % 8); // 32 x 8
-    const char *Gcr_ldg_ptr = (const char *)(
-        Gcr + (threadIdx.x / 32) * n + blockIdx.x * 64 + threadIdx.x % 32); // 8 x 32
+    // Gamma tile ldg (load from global) pointer
+    const char *Glc_r_ldg_ptr = (const char *)(
+        Glc_r + (blockIdx.y * 128 + threadIdx.x / 8 * 4) * k + threadIdx.x % 8); // 32 x 8
+    const char *Glc_i_ldg_ptr = (const char *)(
+        Glc_i + (blockIdx.y * 128 + threadIdx.x / 8 * 4) * k + threadIdx.x % 8); // 32 x 8
+    const char *Gcr_r_ldg_ptr = (const char *)(
+        Gcr_r + (threadIdx.x / 32) * n + blockIdx.x * 64 + threadIdx.x % 32); // 8 x 32
+    const char *Gcr_i_ldg_ptr = (const char *)(
+        Gcr_i + (threadIdx.x / 32) * n + blockIdx.x * 64 + threadIdx.x % 32); // 8 x 32
     // Center Lambda and charge increment index ldg pointer
     const char *LC_ldg_ptr = (const char *)(LC + threadIdx.x);
     const char *incC_ldg_ptr = (const char *)(incC + threadIdx.x);
-    // U ldg pointer
-    const char *U_ldg_ptr[2][2];
-    // #pragma unroll
-    // for (int i = 0; i < 2; ++i) {
-    //     for (int j = 0; j < 2; ++j) {
-    //         U_ldg_ptr[i][j] = (const char *)(U + (cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i]);
-    //     }
-    // }
 
-    // Glc_tile & Gcr_tile sts/lds (set shared memory/load shared memory) pointer
+    // Gamma tile sts/lds (set shared memory/load shared memory) pointer
     // using uint32_t pointer for faster double buffer switch
-    uint32_t Glc_sts_addr = smem_u32addr(
-        Glc_smem + (threadIdx.x % 8) * 132 + (threadIdx.x / 8) * 4);
-    uint32_t Gcr_sts_addr = smem_u32addr(
-        Gcr_smem + (threadIdx.x / 32) * 64 + (threadIdx.x % 32));
+    uint32_t Glc_r_sts_addr = smem_u32addr(
+        Glc_r_smem + (threadIdx.x % 8) * 132 + (threadIdx.x / 8) * 4);
+    uint32_t Glc_i_sts_addr = smem_u32addr(
+        Glc_i_smem + (threadIdx.x % 8) * 132 + (threadIdx.x / 8) * 4);
+    uint32_t Gcr_r_sts_addr = smem_u32addr(
+        Gcr_r_smem + (threadIdx.x / 32) * 64 + (threadIdx.x % 32));
+    uint32_t Gcr_i_sts_addr = smem_u32addr(
+        Gcr_i_smem + (threadIdx.x / 32) * 64 + (threadIdx.x % 32));
     uint32_t LC_sts_addr = smem_u32addr(LC_smem + threadIdx.x);
     uint32_t incC_sts_addr = smem_u32addr(incC_smem + threadIdx.x);
 
-    uint32_t Glc_lds_addr = smem_u32addr(
-        Glc_smem + (warp_id / 2) * 32 + mma_tid_y * 4);
-    uint32_t Gcr_lds_addr = smem_u32addr(
-        Gcr_smem + (warp_id % 2) * 32 + mma_tid_x * 2);
+    uint32_t Glc_r_lds_addr = smem_u32addr(
+        Glc_r_smem + (warp_id / 2) * 32 + mma_tid_y * 4);
+    uint32_t Glc_i_lds_addr = smem_u32addr(
+        Glc_i_smem + (warp_id / 2) * 32 + mma_tid_y * 4);
+    uint32_t Gcr_r_lds_addr = smem_u32addr(
+        Gcr_r_smem + (warp_id % 2) * 32 + mma_tid_x * 2);
+    uint32_t Gcr_i_lds_addr = smem_u32addr(
+        Gcr_i_smem + (warp_id % 2) * 32 + mma_tid_x * 2);
     uint32_t LC_lds_addr = smem_u32addr(LC_smem);
     uint32_t incC_lds_addr = smem_u32addr(incC_smem);
 
@@ -315,8 +332,10 @@ void kernel(const int d,
     }
 
     // Register to store values loaded from global memory before putting them into shared memory
-    float Glc_ldg_reg[4];
-    float Gcr_ldg_reg[2];
+    float Glc_r_ldg_reg[4];
+    float Glc_i_ldg_reg[4];
+    float Gcr_r_ldg_reg[2];
+    float Gcr_i_ldg_reg[2];
     float LC_ldg_reg = 0;
     float incC_ldg_reg = 0;
 
@@ -331,24 +350,33 @@ void kernel(const int d,
         for (int i = 0; i < 4; ++i) {
             bool guard = (Glc_ldg_guard & (1u << i)) != 0 &&
                          threadIdx.x % 8 < first_k_tile;
-            ldg32_nc_0(Glc_ldg_reg[i],
-                       Glc_ldg_ptr + i * Glc_ldg_step,
+            ldg32_nc_0(Glc_r_ldg_reg[i],
+                       Glc_r_ldg_ptr + i * Glc_ldg_step,
+                       guard);
+            ldg32_nc_0(Glc_i_ldg_reg[i],
+                       Glc_i_ldg_ptr + i * Glc_ldg_step,
                        guard);
         }
-        sts128(Glc_ldg_reg[0], Glc_ldg_reg[1], Glc_ldg_reg[2], Glc_ldg_reg[3],
-               Glc_sts_addr);
+        sts128(Glc_r_ldg_reg[0], Glc_r_ldg_reg[1], Glc_r_ldg_reg[2], Glc_r_ldg_reg[3],
+               Glc_r_sts_addr);
+        sts128(Glc_i_ldg_reg[0], Glc_i_ldg_reg[1], Glc_i_ldg_reg[2], Glc_i_ldg_reg[3],
+               Glc_i_sts_addr);
         // Gcr
         #pragma unroll
         for (int i = 0; i < 2; ++i) {
             bool guard = (Gcr_ldg_guard & (1u << i)) != 0 &&
                          threadIdx.x / 32 < first_k_tile;
-            ldg32_nc_0(Gcr_ldg_reg[i],
-                       Gcr_ldg_ptr + i * 32 * sizeof(float),
+            ldg32_nc_0(Gcr_r_ldg_reg[i],
+                       Gcr_r_ldg_ptr + i * 32 * sizeof(float),
+                       guard);
+            ldg32_nc_0(Gcr_i_ldg_reg[i],
+                       Gcr_i_ldg_ptr + i * 32 * sizeof(float),
                        guard);
         }
         #pragma unroll
         for (int i = 0; i < 2; ++i) {
-            sts32(Gcr_ldg_reg[i], Gcr_sts_addr + i * 32 * sizeof(float));
+            sts32(Gcr_r_ldg_reg[i], Gcr_r_sts_addr + i * 32 * sizeof(float));
+            sts32(Gcr_i_ldg_reg[i], Gcr_i_sts_addr + i * 32 * sizeof(float));
         }
         // LC
         bool guard = threadIdx.x < k;
@@ -362,23 +390,35 @@ void kernel(const int d,
         __syncthreads();
 
         // switch double buffer
-        Glc_sts_addr ^= 0x2000;
-        Gcr_sts_addr ^= 0x0800;
+        Glc_r_sts_addr ^= 0x2000;
+        Glc_i_sts_addr ^= 0x2000;
+        Gcr_r_sts_addr ^= 0x0800;
+        Gcr_i_sts_addr ^= 0x0800;
 
         // ldg pointer for next tile
-        Glc_ldg_ptr += first_k_tile * sizeof(float);
-        Gcr_ldg_ptr += n * first_k_tile * sizeof(float);
+        Glc_r_ldg_ptr += first_k_tile * sizeof(float);
+        Glc_i_ldg_ptr += first_k_tile * sizeof(float);
+        Gcr_r_ldg_ptr += n * first_k_tile * sizeof(float);
+        Gcr_i_ldg_ptr += n * first_k_tile * sizeof(float);
     }
 
     // load 1'st fragment
-    lds128(Glc_frag[0][0], Glc_frag[0][1], Glc_frag[0][2], Glc_frag[0][3],
-           Glc_lds_addr);
-    lds128(Glc_frag[0][4], Glc_frag[0][5], Glc_frag[0][6], Glc_frag[0][7],
-           Glc_lds_addr + 16 * sizeof(float));
-    lds64(Gcr_frag[0][0], Gcr_frag[0][1],
-          Gcr_lds_addr);
-    lds64(Gcr_frag[0][2], Gcr_frag[0][3],
-          Gcr_lds_addr + 16 * sizeof(float));
+    lds128(Glc_r_frag[0][0], Glc_r_frag[0][1], Glc_r_frag[0][2], Glc_r_frag[0][3],
+           Glc_r_lds_addr);
+    lds128(Glc_i_frag[0][0], Glc_i_frag[0][1], Glc_i_frag[0][2], Glc_i_frag[0][3],
+           Glc_i_lds_addr);
+    lds128(Glc_r_frag[0][4], Glc_r_frag[0][5], Glc_r_frag[0][6], Glc_r_frag[0][7],
+           Glc_r_lds_addr + 16 * sizeof(float));
+    lds128(Glc_i_frag[0][4], Glc_i_frag[0][5], Glc_i_frag[0][6], Glc_i_frag[0][7],
+           Glc_i_lds_addr + 16 * sizeof(float));
+    lds64(Gcr_r_frag[0][0], Gcr_r_frag[0][1],
+          Gcr_r_lds_addr);
+    lds64(Gcr_i_frag[0][0], Gcr_i_frag[0][1],
+          Gcr_i_lds_addr);
+    lds64(Gcr_r_frag[0][2], Gcr_r_frag[0][3],
+          Gcr_r_lds_addr + 16 * sizeof(float));
+    lds64(Gcr_i_frag[0][2], Gcr_i_frag[0][3],
+          Gcr_i_lds_addr + 16 * sizeof(float));
     // Load the center singular value lambda center
     int c = 0;
     uint8_t c_rem = 0;
@@ -389,9 +429,10 @@ void kernel(const int d,
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
             if (cl[i] >= 0 && 0 >= cr[j]) {
-                U_frag[i][j] = U[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i]];
+                U_r_frag[i][j] = U_r[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i]];
+                U_i_frag[i][j] = U_i[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i]];
             }
-            else { U_frag[i][j] = 0; }
+            else { U_r_frag[i][j] = U_i_frag[i][j] = 0; }
         }
     }
     __syncthreads();
@@ -428,9 +469,10 @@ void kernel(const int d,
                     for (int i = 0; i < 2; ++i) {
                         for (int j = 0; j < 2; ++j) {
                             if (cl[i] >= old_cc && old_cc >= cr[j]) {
-                                U_frag[i][j] = U[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
+                                U_r_frag[i][j] = U_r[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
+                                U_i_frag[i][j] = U_i[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
                             }
-                            else { U_frag[i][j] = 0; }
+                            else { U_r_frag[i][j] = U_i_frag[i][j] = 0; }
                         }
                     }
                     __syncthreads();
@@ -450,55 +492,86 @@ void kernel(const int d,
 
             // store next Glc&Gcr tile to shared memory
             if (k_frag == 7) {
-                sts128(Glc_ldg_reg[0], Glc_ldg_reg[1], Glc_ldg_reg[2], Glc_ldg_reg[3],
-                       Glc_sts_addr);
+                sts128(Glc_r_ldg_reg[0], Glc_r_ldg_reg[1], Glc_r_ldg_reg[2], Glc_r_ldg_reg[3],
+                       Glc_r_sts_addr);
+                sts128(Glc_i_ldg_reg[0], Glc_i_ldg_reg[1], Glc_i_ldg_reg[2], Glc_i_ldg_reg[3],
+                       Glc_i_sts_addr);
                 #pragma unroll
                 for (int i = 0; i < 2; ++i) {
-                    sts32(Gcr_ldg_reg[i], Gcr_sts_addr + i * 32 * sizeof(float));
+                    sts32(Gcr_r_ldg_reg[i], Gcr_r_sts_addr + i * 32 * sizeof(float));
+                    sts32(Gcr_i_ldg_reg[i], Gcr_i_sts_addr + i * 32 * sizeof(float));
                 }
                 __syncthreads();
                 // switch double buffer
-                Glc_lds_addr ^= 0x2000;
-                Gcr_lds_addr ^= 0x0800;
-                Glc_sts_addr ^= 0x2000;
-                Gcr_sts_addr ^= 0x0800;
+                Glc_r_lds_addr ^= 0x2000;
+                Glc_i_lds_addr ^= 0x2000;
+                Gcr_r_lds_addr ^= 0x0800;
+                Gcr_i_lds_addr ^= 0x0800;
+                Glc_r_sts_addr ^= 0x2000;
+                Glc_i_sts_addr ^= 0x2000;
+                Gcr_r_sts_addr ^= 0x0800;
+                Gcr_i_sts_addr ^= 0x0800;
                 // ldg pointer for next tile
-                Glc_ldg_ptr += 8 * sizeof(float);
-                Gcr_ldg_ptr += Gcr_ldg_step;
+                Glc_r_ldg_ptr += 8 * sizeof(float);
+                Glc_i_ldg_ptr += 8 * sizeof(float);
+                Gcr_r_ldg_ptr += Gcr_ldg_step;
+                Gcr_i_ldg_ptr += Gcr_ldg_step;
             }
 
             // load next Glc&Gcr fragment from shared memory to register
             lds32(lc[(k_frag + 1) % 2], LC_lds_addr + c_rem * sizeof(float));
-            lds128(Glc_frag[(k_frag + 1) % 2][0],
-                   Glc_frag[(k_frag + 1) % 2][1],
-                   Glc_frag[(k_frag + 1) % 2][2],
-                   Glc_frag[(k_frag + 1) % 2][3],
-                   Glc_lds_addr + (k_frag + 1) % 8 * 132 * sizeof(float));
-            lds128(Glc_frag[(k_frag + 1) % 2][4],
-                   Glc_frag[(k_frag + 1) % 2][5],
-                   Glc_frag[(k_frag + 1) % 2][6],
-                   Glc_frag[(k_frag + 1) % 2][7],
-                   Glc_lds_addr + ((k_frag + 1) % 8 * 132 + 16) * sizeof(float));
-            lds64(Gcr_frag[(k_frag + 1) % 2][0],
-                  Gcr_frag[(k_frag + 1) % 2][1],
-                  Gcr_lds_addr + (k_frag + 1) % 8 * 64 * sizeof(float));
-            lds64(Gcr_frag[(k_frag + 1) % 2][2],
-                  Gcr_frag[(k_frag + 1) % 2][3],
-                  Gcr_lds_addr + ((k_frag + 1) % 8 * 64 + 16) * sizeof(float));
+            lds128(Glc_r_frag[(k_frag + 1) % 2][0],
+                   Glc_r_frag[(k_frag + 1) % 2][1],
+                   Glc_r_frag[(k_frag + 1) % 2][2],
+                   Glc_r_frag[(k_frag + 1) % 2][3],
+                   Glc_r_lds_addr + (k_frag + 1) % 8 * 132 * sizeof(float));
+            lds128(Glc_i_frag[(k_frag + 1) % 2][0],
+                   Glc_i_frag[(k_frag + 1) % 2][1],
+                   Glc_i_frag[(k_frag + 1) % 2][2],
+                   Glc_i_frag[(k_frag + 1) % 2][3],
+                   Glc_i_lds_addr + (k_frag + 1) % 8 * 132 * sizeof(float));
+            lds128(Glc_r_frag[(k_frag + 1) % 2][4],
+                   Glc_r_frag[(k_frag + 1) % 2][5],
+                   Glc_r_frag[(k_frag + 1) % 2][6],
+                   Glc_r_frag[(k_frag + 1) % 2][7],
+                   Glc_r_lds_addr + ((k_frag + 1) % 8 * 132 + 16) * sizeof(float));
+            lds128(Glc_i_frag[(k_frag + 1) % 2][4],
+                   Glc_i_frag[(k_frag + 1) % 2][5],
+                   Glc_i_frag[(k_frag + 1) % 2][6],
+                   Glc_i_frag[(k_frag + 1) % 2][7],
+                   Glc_i_lds_addr + ((k_frag + 1) % 8 * 132 + 16) * sizeof(float));
+            lds64(Gcr_r_frag[(k_frag + 1) % 2][0],
+                  Gcr_r_frag[(k_frag + 1) % 2][1],
+                  Gcr_r_lds_addr + (k_frag + 1) % 8 * 64 * sizeof(float));
+            lds64(Gcr_i_frag[(k_frag + 1) % 2][0],
+                  Gcr_i_frag[(k_frag + 1) % 2][1],
+                  Gcr_i_lds_addr + (k_frag + 1) % 8 * 64 * sizeof(float));
+            lds64(Gcr_r_frag[(k_frag + 1) % 2][2],
+                  Gcr_r_frag[(k_frag + 1) % 2][3],
+                  Gcr_r_lds_addr + ((k_frag + 1) % 8 * 64 + 16) * sizeof(float));
+            lds64(Gcr_i_frag[(k_frag + 1) % 2][2],
+                  Gcr_i_frag[(k_frag + 1) % 2][3],
+                  Gcr_i_lds_addr + ((k_frag + 1) % 8 * 64 + 16) * sizeof(float));
 
             // load next Glc&Gcr tile
             if (k_frag == 0) {
                 #pragma unroll
                 for (int i = 0; i < 4; ++i) {
-                    ldg32_nc(Glc_ldg_reg[i],
-                             Glc_ldg_ptr + i * Glc_ldg_step,
+                    ldg32_nc(Glc_r_ldg_reg[i],
+                             Glc_r_ldg_ptr + i * Glc_ldg_step,
+                             (Glc_ldg_guard & (1u << i)) != 0);
+                    ldg32_nc(Glc_i_ldg_reg[i],
+                             Glc_i_ldg_ptr + i * Glc_ldg_step,
                              (Glc_ldg_guard & (1u << i)) != 0);
                 }
 
                 #pragma unroll
                 for (int i = 0; i < 2; ++i) {
-                    ldg32_nc(Gcr_ldg_reg[i],
-                             Gcr_ldg_ptr + i * 32 * sizeof(float),
+                    ldg32_nc(Gcr_r_ldg_reg[i],
+                             Gcr_r_ldg_ptr + i * 32 * sizeof(float),
+                             (Gcr_ldg_guard & (1u << i)) != 0);
+                    ldg32_nc(Gcr_i_ldg_reg[i],
+                             Gcr_i_ldg_ptr + i * 32 * sizeof(float),
                              (Gcr_ldg_guard & (1u << i)) != 0);
                 }
             }
@@ -510,10 +583,8 @@ void kernel(const int d,
                 for (int i = 0; i < 8; ++i) {
                     #pragma unroll
                     for (int j = 0; j < 4; ++j) {
-                        T_frag[i][j] += U_frag[i / 4][j / 2] *
-                                        Glc_frag[k_frag % 2][i] *
-                                        Gcr_frag[k_frag % 2][j] *
-                                        lc[k_frag % 2];
+                        T_r_frag[i][j] += lc[k_frag % 2] * (U_r_frag[i / 4][j / 2] * (Glc_r_frag[k_frag % 2][i] * Gcr_r_frag[k_frag % 2][j] - Glc_i_frag[k_frag % 2][i] * Gcr_i_frag[k_frag % 2][j]) - U_i_frag[i / 4][j / 2] * (Glc_r_frag[k_frag % 2][i] * Gcr_i_frag[k_frag % 2][j] + Glc_i_frag[k_frag % 2][i] * Gcr_r_frag[k_frag % 2][j]));
+                        T_i_frag[i][j] += lc[k_frag % 2] * (U_r_frag[i / 4][j / 2] * (Glc_r_frag[k_frag % 2][i] * Gcr_i_frag[k_frag % 2][j] + Glc_i_frag[k_frag % 2][i] * Gcr_r_frag[k_frag % 2][j]) + U_i_frag[i / 4][j / 2] * (Glc_r_frag[k_frag % 2][i] * Gcr_r_frag[k_frag % 2][j] - Glc_i_frag[k_frag % 2][i] * Gcr_i_frag[k_frag % 2][j]));
                     }
                 }
             }
@@ -538,9 +609,10 @@ void kernel(const int d,
             for (int i = 0; i < 2; ++i) {
                 for (int j = 0; j < 2; ++j) {
                     if (cl[i] >= old_cc && old_cc >= cr[j]) {
-                       U_frag[i][j] = U[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
+                       U_r_frag[i][j] = U_r[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
+                       U_i_frag[i][j] = U_i[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
                     }
-                    else { U_frag[i][j] = 0; }
+                    else { U_r_frag[i][j] = 0; }
                 }
             }
         }
@@ -557,23 +629,39 @@ void kernel(const int d,
 
         if (k_frag < 7) {
             // load next Glc&Gcr fragment from shared memory to register
-            lds128(Glc_frag[(k_frag + 1) % 2][0],
-                   Glc_frag[(k_frag + 1) % 2][1],
-                   Glc_frag[(k_frag + 1) % 2][2],
-                   Glc_frag[(k_frag + 1) % 2][3],
-                   Glc_lds_addr + (k_frag + 1) % 8 * 132 * sizeof(float));
-            lds128(Glc_frag[(k_frag + 1) % 2][4],
-                   Glc_frag[(k_frag + 1) % 2][5],
-                   Glc_frag[(k_frag + 1) % 2][6],
-                   Glc_frag[(k_frag + 1) % 2][7],
-                   Glc_lds_addr + ((k_frag + 1) % 8 * 132 + 16) * sizeof(float));
-            lds64(Gcr_frag[(k_frag + 1) % 2][0],
-                  Gcr_frag[(k_frag + 1) % 2][1],
-                  Gcr_lds_addr + (k_frag + 1) % 8 * 64 * sizeof(float));
-            lds64(Gcr_frag[(k_frag + 1) % 2][2],
-                  Gcr_frag[(k_frag + 1) % 2][3],
-                  Gcr_lds_addr + ((k_frag + 1) % 8 * 64 + 16)* sizeof(float));
-            lds32(lc[(k_frag + 1) % 2], LC_lds_addr + (c % 256) * sizeof(float));
+            lds32(lc[(k_frag + 1) % 2], LC_lds_addr + c_rem * sizeof(float));
+            lds128(Glc_r_frag[(k_frag + 1) % 2][0],
+                   Glc_r_frag[(k_frag + 1) % 2][1],
+                   Glc_r_frag[(k_frag + 1) % 2][2],
+                   Glc_r_frag[(k_frag + 1) % 2][3],
+                   Glc_r_lds_addr + (k_frag + 1) % 8 * 132 * sizeof(float));
+            lds128(Glc_i_frag[(k_frag + 1) % 2][0],
+                   Glc_i_frag[(k_frag + 1) % 2][1],
+                   Glc_i_frag[(k_frag + 1) % 2][2],
+                   Glc_i_frag[(k_frag + 1) % 2][3],
+                   Glc_i_lds_addr + (k_frag + 1) % 8 * 132 * sizeof(float));
+            lds128(Glc_r_frag[(k_frag + 1) % 2][4],
+                   Glc_r_frag[(k_frag + 1) % 2][5],
+                   Glc_r_frag[(k_frag + 1) % 2][6],
+                   Glc_r_frag[(k_frag + 1) % 2][7],
+                   Glc_r_lds_addr + ((k_frag + 1) % 8 * 132 + 16) * sizeof(float));
+            lds128(Glc_i_frag[(k_frag + 1) % 2][4],
+                   Glc_i_frag[(k_frag + 1) % 2][5],
+                   Glc_i_frag[(k_frag + 1) % 2][6],
+                   Glc_i_frag[(k_frag + 1) % 2][7],
+                   Glc_i_lds_addr + ((k_frag + 1) % 8 * 132 + 16) * sizeof(float));
+            lds64(Gcr_r_frag[(k_frag + 1) % 2][0],
+                  Gcr_r_frag[(k_frag + 1) % 2][1],
+                  Gcr_r_lds_addr + (k_frag + 1) % 8 * 64 * sizeof(float));
+            lds64(Gcr_i_frag[(k_frag + 1) % 2][0],
+                  Gcr_i_frag[(k_frag + 1) % 2][1],
+                  Gcr_i_lds_addr + (k_frag + 1) % 8 * 64 * sizeof(float));
+            lds64(Gcr_r_frag[(k_frag + 1) % 2][2],
+                  Gcr_r_frag[(k_frag + 1) % 2][3],
+                  Gcr_r_lds_addr + ((k_frag + 1) % 8 * 64 + 16) * sizeof(float));
+            lds64(Gcr_i_frag[(k_frag + 1) % 2][2],
+                  Gcr_i_frag[(k_frag + 1) % 2][3],
+                  Gcr_i_lds_addr + ((k_frag + 1) % 8 * 64 + 16) * sizeof(float));
         }
 
         // FFMA loop
@@ -581,10 +669,8 @@ void kernel(const int d,
         for (int i = 0; i < 8; ++i) {
             #pragma unroll
             for (int j = 0; j < 4; ++j) {
-                T_frag[i][j] += U_frag[i / 4][j / 2] *
-                                Glc_frag[k_frag % 2][i] *
-                                Gcr_frag[k_frag % 2][j] *
-                                lc[k_frag % 2];
+                T_r_frag[i][j] += lc[k_frag % 2] * (U_r_frag[i / 4][j / 2] * (Glc_r_frag[k_frag % 2][i] * Gcr_r_frag[k_frag % 2][j] - Glc_i_frag[k_frag % 2][i] * Gcr_i_frag[k_frag % 2][j]) - U_i_frag[i / 4][j / 2] * (Glc_r_frag[k_frag % 2][i] * Gcr_i_frag[k_frag % 2][j] + Glc_i_frag[k_frag % 2][i] * Gcr_r_frag[k_frag % 2][j]));
+                T_i_frag[i][j] += lc[k_frag % 2] * (U_r_frag[i / 4][j / 2] * (Glc_r_frag[k_frag % 2][i] * Gcr_i_frag[k_frag % 2][j] + Glc_i_frag[k_frag % 2][i] * Gcr_r_frag[k_frag % 2][j]) + U_i_frag[i / 4][j / 2] * (Glc_r_frag[k_frag % 2][i] * Gcr_r_frag[k_frag % 2][j] - Glc_i_frag[k_frag % 2][i] * Gcr_i_frag[k_frag % 2][j]));
             }
         }
     }
@@ -596,14 +682,14 @@ void kernel(const int d,
     for (int tile_y = 0; tile_y < 2; ++tile_y){
         #pragma unroll
         for (int i = 0; i < 4; ++i){
-            Glc_frag[0][tile_y * 4 + i] = LL[m_idx + tile_y * 16 + i];
+            Glc_r_frag[0][tile_y * 4 + i] = LL[m_idx + tile_y * 16 + i];
         }
     }
     #pragma unroll
     for (int tile_x = 0; tile_x < 2; ++tile_x){
         #pragma unroll
         for (int j = 0; j < 2; ++j){
-            Gcr_frag[0][tile_x * 2 + j] = LR[n_idx + tile_x * 16 + j];
+            Gcr_r_frag[0][tile_x * 2 + j] = LR[n_idx + tile_x * 16 + j];
         }
     }
     // Multiply accumulator by lambda values
@@ -611,20 +697,26 @@ void kernel(const int d,
     for (int i = 0; i < 8; ++i) {
         #pragma unroll
         for (int j = 0; j < 4; ++j) {
-            T_frag[i][j] *= Glc_frag[0][i] *
-                            Gcr_frag[0][j];
+            T_r_frag[i][j] *= Glc_r_frag[0][i] *
+                            Gcr_r_frag[0][j];
+            T_i_frag[i][j] *= Glc_r_frag[0][i] *
+                            Gcr_r_frag[0][j];
         }
     }
 
     // T_tile write back, reuse Glc&Gcr tile shared memory buffer
-    uint32_t T_sts_addr = smem_u32addr((float2 *)(smem + warp_id * 1024) +
+    uint32_t T_r_sts_addr = smem_u32addr((float2 *)(smem + warp_id * 1024) +
                                        mma_tid_y * 4 * 8 + mma_tid_x);
-    const float *T_lds_ptr = (float *)(smem + warp_id * 1024) + lane_id;
+    uint32_t T_i_sts_addr = smem_u32addr((float2 *)(smem + 8192 + warp_id * 1024) +
+                                       mma_tid_y * 4 * 8 + mma_tid_x);
+    const float *T_r_lds_ptr = (float *)(smem + warp_id * 1024) + lane_id;
+    const float *T_i_lds_ptr = (float *)(smem + 8192 + warp_id * 1024) + lane_id;
 
     m_idx = blockIdx.y * 128 + warp_id / 2 * 32 + lane_id / 16;
     n_idx = blockIdx.x * 64 + warp_id % 2 * 32 + lane_id % 16;
 
-    float *T_stg_ptr = T + m_idx * n + n_idx;
+    float *T_r_stg_ptr = T_r + m_idx * n + n_idx;
+    float *T_i_stg_ptr = T_i + m_idx * n + n_idx;
 
     if (m_idx >= m) {
         return;
@@ -643,17 +735,23 @@ void kernel(const int d,
 
                 #pragma unroll
                 for (int p = 0; p < 4; ++p) {
-                    sts64(T_frag[i * 4 + p][j * 2],
-                        T_frag[i * 4 + p][j * 2 + 1],
-                        T_sts_addr + p * 8 * sizeof(float2));
+                    sts64(T_r_frag[i * 4 + p][j * 2],
+                        T_r_frag[i * 4 + p][j * 2 + 1],
+                        T_r_sts_addr + p * 8 * sizeof(float2));
+                    sts64(T_i_frag[i * 4 + p][j * 2],
+                        T_i_frag[i * 4 + p][j * 2 + 1],
+                        T_i_sts_addr + p * 8 * sizeof(float2));
                 }
 
                 __syncthreads();
 
                 #pragma unroll
                 for (int p = 0; p < 8; ++p) {
-                    stg32(T_lds_ptr[p * 32],
-                        T_stg_ptr + (i * 16 + p * 2) * n + j * 16,
+                    stg32(T_r_lds_ptr[p * 32],
+                        T_r_stg_ptr + (i * 16 + p * 2) * n + j * 16,
+                        p < m_guard && j * 16 < n_guard);
+                    stg32(T_i_lds_ptr[p * 32],
+                        T_i_stg_ptr + (i * 16 + p * 2) * n + j * 16,
                         p < m_guard && j * 16 < n_guard);
                 }
             }
