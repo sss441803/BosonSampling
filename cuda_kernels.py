@@ -101,7 +101,7 @@ extern "C" __global__ void unitary(const int d, const ctype t, const ctype r, ct
 
 # Function generating random unitary on CUDA
 def Rand_U(d: int, r: float):
-    U = cp.zeros([d, d, d], dtype=np.complex64)
+    U = cp.zeros(d**3, dtype=complex)
     t = sqrt(1 - r ** 2) * exp(1j * np.random.rand() * 2 * pi)
     r = r * exp(1j * np.random.rand() * 2 * pi)
     threadsperblock = (8, 8, 8)

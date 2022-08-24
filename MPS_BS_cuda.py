@@ -3,6 +3,7 @@ import numpy as np
 import cupy as cp
 
 from scipy.stats import rv_continuous
+from scipy.special import factorial, comb
 
 import time
 
@@ -12,7 +13,24 @@ from sort import Aligner
 np.random.seed(1)
 
 
+np.set_printoptions(precision=3)
 
+
+def Rand_BS_MPS(d, r):
+    t = np.sqrt(1 - r ** 2) * np.exp(1j * np.random.rand() * 2 * np.pi);
+    r = r * np.exp(1j * np.random.rand() * 2 * np.pi);
+    ct = np.conj(t); cr = np.conj(r);
+    bs_coeff = lambda n, m, k, l: np.sqrt(factorial(l) * factorial(n + m - l) / factorial(n) / factorial(m)) * comb(n, k) * comb(m, l - k) * (t ** k) * (ct ** (m - l + k)) * (r ** (n - k)) * ((-cr) ** (l - k))
+    BS = np.zeros([d, d, d], dtype = 'complex64');
+    for n in range(d): #photon number from 0 to d-1
+        for m in range(d):
+            for l in range(max(0, n + m + 1 - d), min(d, n + m + 1)): #photon number on first output mode
+                k = np.arange(max(0, l - m), min(l + 1, n + 1, d))
+                BS[n, m, l] = np.sum(bs_coeff(n, m, k, l))
+                
+    Output = BS
+    
+    return cp.array(Output)
 
 
 # Checking if GPU computed results agree with the CPU results
@@ -68,7 +86,7 @@ class MPS:
         self.TotalProbPar = np.zeros([n])
         self.SingleProbPar = np.zeros([n])
         self.EEPar = np.zeros([n - 1,n])
-        self.REPar = np.zeros([n - 1, n, 1], dtype=data_type)
+        self.REPar = np.zeros([n - 1, n, 1], dtype=np.float32)
         
     def MPSInitialization(self):
         self.dGamma = cp.zeros([self.n, self.chi, self.chi], dtype=data_type); # modes, alpha, alpha
@@ -113,7 +131,7 @@ class MPS:
     def MPStwoqubitUpdateDevice(self, l, r, seed):
         
         # Initializing unitary matrix on GPU
-        cp.random.seed(seed)
+        np.random.seed(seed)
         U = Rand_U(self.d, r)
 
         # Determining the location of the two qubit gate
@@ -174,12 +192,17 @@ class MPS:
                 continue
 
             # Computes Theta matrix
-            #cpuT = loop(self, tau, U, cl, cc, cr, ll, glc, lc, gcr, lr)
-            #T = cp.array(cpuT)
+            #print('inputs: ', self.d, tau, U, cl, cc, cr, ll, glc, lc, gcr, lr)
+            #T = loop(self.d, tau, U, cl, cc, cr, ll, glc, lc, gcr, lr)
+            if tau == 0 and cc.shape[0] == 1:
+                print(tau, U.shape, glc.shape, gcr.shape, ll.shape, lc.shape, lr.shape, cl.shape, cc.shape, cr.shape, incC.shape)
+                print(U, glc, gcr, ll, lc, lr, cl, cc, cr, incC)
+            cp.cuda.runtime.deviceSynchronize()
             T = update_MPS(self.d, tau, U, glc, gcr, ll, lc, lr, cl, cc, cr, incC)
-            print('T: ', T)
+            cp.cuda.runtime.deviceSynchronize()
             # De-align (compact) T
             T = aligner.compact_data(True, 'T', T, min_charge_l, max_charge_l, min_charge_r, max_charge_r)
+            #print('T: ', T)
             
             # SVD
             V, Lambda, W = np.linalg.svd(T, full_matrices = False)
@@ -249,7 +272,7 @@ class MPS:
         # Selecting and sorting Lambda
         new_Lambda = new_Lambda[idx_select]
         new_Lambda = new_Lambda[idx_sort]
-        print(np.sort(new_Lambda))
+        #print(np.max(new_Lambda))
         LC[:num_lambda] = new_Lambda
         LC[num_lambda:] = 0
 
@@ -291,6 +314,7 @@ class MPS:
                     temp2 += 2
                 self.MPStwoqubitUpdate(l, np.sqrt(1 - T))
                 l -= 1;   
+        print('One cycle')
         
     def RCS1DMultiCycle(self):
         self.MPSInitialization()
