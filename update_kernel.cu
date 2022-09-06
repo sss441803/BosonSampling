@@ -271,10 +271,18 @@ void kernel(const int d,
     int m_idx = blockIdx.y * 128 + warp_id / 2 * 32 + mma_tid_y * 4;
     int n_idx = blockIdx.x * 64 + warp_id % 2 * 32 + mma_tid_x * 2;
     int cl[2]; int cr[2];
-    cl[0] = CL[m_idx];
-    cl[1] = CL[m_idx + 16];
-    cr[0] = CR[n_idx];
-    cr[1] = CR[n_idx + 16];
+    if (m_idx < m) { cl[0] = CL[m_idx]; }
+    else { cl[0] = -1; }
+    if (m_idx + 16 < m) { cl[1] = CL[m_idx + 16]; }
+    else { cl[1] = -1; }
+    if (n_idx < n) { cr[0] = CR[n_idx]; }
+    else { cr[0] = -1; }
+    if (n_idx + 16 < n) { cr[1] = CR[n_idx + 16]; }
+    else { cr[1] = -1; }
+    // cl[0] = CL[m_idx];
+    // cl[1] = CL[m_idx + 16];
+    // cr[0] = CR[n_idx];
+    // cr[1] = CR[n_idx + 16];
 
     // Gamma tile ldg (load from global) pointer
     const char *Glc_r_ldg_ptr = (const char *)(
@@ -428,7 +436,7 @@ void kernel(const int d,
     #pragma unroll
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
-            if (cl[i] >= 0 && 0 >= cr[j]) {
+            if (cl[i] >= 0 && 0 >= cr[j] && cl[i] != -1 && cr[j] != -1) {
                 U_r_frag[i][j] = U_r[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i]];
                 U_i_frag[i][j] = U_i[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i]];
             }
@@ -468,7 +476,7 @@ void kernel(const int d,
                     #pragma unroll
                     for (int i = 0; i < 2; ++i) {
                         for (int j = 0; j < 2; ++j) {
-                            if (cl[i] >= old_cc && old_cc >= cr[j]) {
+                            if (cl[i] >= old_cc && old_cc >= cr[j] && cl[i] != -1 && cr[j] != -1) {
                                 U_r_frag[i][j] = U_r[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
                                 U_i_frag[i][j] = U_i[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
                             }
@@ -608,13 +616,14 @@ void kernel(const int d,
             #pragma unroll
             for (int i = 0; i < 2; ++i) {
                 for (int j = 0; j < 2; ++j) {
-                    if (cl[i] >= old_cc && old_cc >= cr[j]) {
+                    if (cl[i] >= old_cc && old_cc >= cr[j] && cl[i] != -1 && cr[j] != -1) {
                        U_r_frag[i][j] = U_r[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
                        U_i_frag[i][j] = U_i[(cl[i] - tau) * d * d + (tau - cr[j]) * d + cl[i] - old_cc];
                     }
-                    else { U_r_frag[i][j] = 0; }
+                    else { U_r_frag[i][j] = U_i_frag[i][j] = 0; }
                 }
             }
+            __syncthreads();
         }
         // Increase c
         c += 1;
@@ -622,7 +631,8 @@ void kernel(const int d,
         // Load center Lambda into shared memory every 256 index iterations
         if (c_rem == 0){
             bool guard = threadIdx.x < (k - 256 * c/256);
-            ldg32_nc(LC_ldg_reg, LC_ldg_ptr + 256 * c/256 * sizeof(float), guard);
+            ldg32_nc(LC_ldg_reg, LC_ldg_ptr + 256 * c_rem * sizeof(float), guard);
+            __syncthreads();
             sts32(LC_ldg_reg, LC_sts_addr);
             __syncthreads();
         }

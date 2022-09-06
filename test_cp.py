@@ -1,3 +1,4 @@
+from ast import Delete
 from cuda_kernels import Rand_U, update_MPS
 
 import cupy as cp
@@ -11,14 +12,15 @@ import itertools
 def Rand_BS_MPS_np(d, r):
     t = np.sqrt(1 - r ** 2) * np.exp(1j * np.random.rand() * 2 * np.pi);
     r = r * np.exp(1j * np.random.rand() * 2 * np.pi);
+    print(t, r)
     ct = np.conj(t); cr = np.conj(r);
     bs_coeff = lambda n, m, k, l: np.sqrt(s.factorial(l) * s.factorial(n + m - l) / s.factorial(n) / s.factorial(m)) * s.comb(n, k) * s.comb(m, l - k) * (t ** k) * (ct ** (m - l + k)) * (r ** (n - k)) * ((-cr) ** (l - k))
-    BS = np.zeros([d, d, d], dtype = complex);
+    BS = np.zeros([d, d, d], dtype = np.complex64);
     for n in range(d): #photon number from 0 to d-1
         for m in range(d):
             for l in range(max(0, n + m + 1 - d), min(d, n + m + 1)): #photon number on first output mode
                 k = np.arange(max(0, l - m), min(l + 1, n + 1, d))
-                BS[n, m, l] = np.sum(bs_coeff(n, m, k, l))
+                BS[n, m, l] = np.sum(np.complex64(bs_coeff(n, m, k, l)))
                 if (n*d*d+m*d+l==6397):
                     print(bs_coeff(n, m, k, l))
                     print(np.sum(bs_coeff(n,m,k,l)))
@@ -60,41 +62,44 @@ def update_MPS_np(tau, d, idx_L, idx_C, idx_R, C, BS, Lambda_l, Gamma_lc, Lambda
 
 if __name__ == "__main__":
 
-    test_unitary = False
-    test_update = True
+    test_unitary = True
+    test_update = False
+    test_kernel_failure = True
 
     if test_unitary:
 
-        d=50
+        d = 50
         iterations = 1
 
         seed = 1#np.random.randint(0, 100000)
         np.random.seed(seed)
-        cp_result = cp.zeros(d**3, dtype=complex)
-        Rand_U(d, 0.2, cp_result)
-        print("GPU nan elements: ", np.argwhere(np.isnan(cp_result.reshape(-1))).shape[0])
+        cp_result_r, cp_result_i = Rand_U(d, 0.2)
+        cp_result = cp_result_r + 1j*cp_result_i
+        # print("GPU nan elements: ", np.argwhere(np.isnan(cp_result.reshape(-1))).shape[0])
         np.random.seed(seed)
         np_result = Rand_BS_MPS_np(d, 0.2)
-        print("CPU non elements: ", np.argwhere(np.isnan(np_result.reshape(-1))).shape[0])
-        start = np.random.randint(0, d**3-10)
-        print("Results agree? ", np.allclose(cp.asnumpy(cp_result).reshape(-1), np_result.reshape(-1), atol=0.0001))
-        print("Maximum error: ", np.abs((cp.asnumpy(cp_result) - np_result.reshape(-1))).max())
+        print(cp.asnumpy(cp_result) - np_result)
+        # print("CPU non elements: ", np.argwhere(np.isnan(np_result.reshape(-1))).shape[0])
+        print("Results agree? ", np.allclose(cp.asnumpy(cp_result), np_result, atol=0.0001))
+        print("Maximum error: ", np.abs((cp.asnumpy(cp_result) - np_result)).max())
         start = time.time()
         for i in range(iterations):
-            Rand_U(d, 0.2, cp_result)
-        print(cp_result[0])
+            cp_result_r, cp_result_i = Rand_U(d, 0.2)
+        print(cp_result_r[0,0,0], cp_result_i[0,0,0])
         print("GPU time: ", time.time()-start)
         start = time.time()
         for i in range(iterations):
-            a=Rand_BS_MPS_np(d, 0.2)
+            a = Rand_BS_MPS_np(d, 0.2)
         print(a[0,0,0])
         print("CPU time: ", time.time()-start)
+
+        #del cp_result, cp_result_r, cp_result_i
 
     if test_update:
 
         errtol = 0.7
 
-        d = 20
+        d = 50
         tau = 10
         chi = 2000
 
@@ -171,3 +176,33 @@ if __name__ == "__main__":
         #print(np.nonzero(np.abs(C_np).reshape(-1))[0].shape[0])
         #print(C_np)
         #print(np.allclose(cp.asnumpy(C).reshape(-1), C_np.reshape(-1)))
+
+    if test_kernel_failure:
+
+        d = 50
+        tau = 0
+        r = 0.5
+
+        array = cp.random.rand(d,d,d)
+
+        # U = cp.ones([d,d,d], dtype=np.complex64)
+        U_r, U_i = Rand_U(d, r)
+
+        glc = cp.array([[1],
+                        [0],
+                        [0],
+                        [0],
+                        [0],
+                        [0],
+                        [0],
+                        [0]], dtype=np.complex64) 
+        gcr = cp.array([[1, 0, 0, 0, 0, 0, 0, 0]], dtype=np.complex64)
+        ll = cp.array([1., 0., 0., 0., 0., 0., 0., 0.], dtype=np.float32)
+        lc = cp.array([1.], dtype=np.float32)
+        lr = cp.array([1., 1., 1., 1., 1., 1., 1., 1.], dtype=np.float32)
+        cl = cp.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=np.int32)
+        cc = cp.array([0], dtype=np.int32)
+        cr = cp.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=np.int32)
+        incC = cp.array([0, -1, -1, -1, -1, -1, -1, 1], dtype=np.int32)
+
+        print(update_MPS(d, tau, U_r, U_i, glc, gcr, ll, lc, lr, cl, cc, cr, incC))

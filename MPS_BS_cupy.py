@@ -11,9 +11,8 @@ from cuda_kernels import update_MPS, Rand_U
 from sort import Aligner
 
 np.random.seed(1)
-
-
 np.set_printoptions(precision=3)
+s = cp.cuda.Stream()
 
 
 def Rand_BS_MPS(d, r):
@@ -87,6 +86,18 @@ class MPS:
         self.SingleProbPar = np.zeros([n])
         self.EEPar = np.zeros([n - 1,n])
         self.REPar = np.zeros([n - 1, n, 1], dtype=np.float32)
+        self.update_time = 0
+        self.U_time = 0
+        self.svd_time = 0
+        self.theta_time = 0
+        self.align_init_time = 0
+        self.align_info_time = 0
+        self.index_time = 0
+        self.copy_time = 0
+        self.align_time = 0
+        self.other_time = 0
+        self.largest_C = 0
+        self.largest_T = 0
         
     def MPSInitialization(self):
         self.dGamma = cp.zeros([self.n, self.chi, self.chi], dtype=data_type); # modes, alpha, alpha
@@ -132,7 +143,11 @@ class MPS:
         
         # Initializing unitary matrix on GPU
         np.random.seed(seed)
-        U = Rand_U(self.d, r)
+        start = time.time()
+        U_r, U_i = Rand_U(self.d, r)
+        s.synchronize()
+        #print(U_r[0,0,0])
+        self.U_time += time.time() - start
 
         # Determining the location of the two qubit gate
         left = "Left"
@@ -162,12 +177,20 @@ class MPS:
         CC = self.dcharge[l+1,:]
         CR = self.dcharge[l+2,:]
 
+        start = time.time()
         # Creating aligner according to left and right charges. Will be used for algning, de-aligning (compacting), selecting data, etc.
         aligner = Aligner(self.d, self.chi, CL, CC, CR)
+        self.align_info_time += aligner.align_info_time
+        self.index_time += aligner.index_time
+        self.align_init_time += time.time() - start
+        start = time.time()
         # Obtaining aligned charges
         cNewL, cNewR, incC = map(cp.array, [aligner.cNewL, aligner.cNewR, aligner.incC])
+        self.copy_time = time.time() - start
+        start = time.time()
         # Obtaining aligned data
         LL, LR, Glc, Gcr = map(aligner.align_data, ['LL','LR','Glc','Gcr'], [LL,LR,Glc,Gcr])
+        self.align_time += time.time() - start
 
         # Storage of generated data
         new_Gamma_L = []
@@ -178,6 +201,8 @@ class MPS:
 
         for tau in range(self.d):
 
+            start = time.time()
+
             # Bounds for data selection. Given tau (center charge), find the range of possible charges for left, center and right.
             min_charge_l, max_charge_l, min_charge_c, max_charge_c, min_charge_r, max_charge_r = self.charge_range(location, tau)
             # Selecting data according to charge bounds
@@ -187,26 +212,37 @@ class MPS:
 
             # Skip if any selection must be empty
             len_l, len_r = cl.shape[0], cr.shape[0]
+            self.largest_C = max(max(len_l, len_r), self.largest_C)
             if len_l*len_r == 0:
                 tau_array.append(0)
                 continue
 
+            self.align_time += time.time() - start
+
             # Computes Theta matrix
-            #print('inputs: ', self.d, tau, U, cl, cc, cr, ll, glc, lc, gcr, lr)
+            # print('inputs: ', self.d, tau, U, cl, cc, cr, ll, glc, lc, gcr, lr)
             #T = loop(self.d, tau, U, cl, cc, cr, ll, glc, lc, gcr, lr)
-            if tau == 0 and cc.shape[0] == 1:
-                print(tau, U.shape, glc.shape, gcr.shape, ll.shape, lc.shape, lr.shape, cl.shape, cc.shape, cr.shape, incC.shape)
-                print(U, glc, gcr, ll, lc, lr, cl, cc, cr, incC)
-            cp.cuda.runtime.deviceSynchronize()
-            T = update_MPS(self.d, tau, U, glc, gcr, ll, lc, lr, cl, cc, cr, incC)
-            cp.cuda.runtime.deviceSynchronize()
+            # if tau == 0 and cc.shape[0] == 1:
+            #     print(tau, U.shape, glc.shape, gcr.shape, ll.shape, lc.shape, lr.shape, cl.shape, cc.shape, cr.shape, incC.shape)
+            #     print(self.d, tau, U, glc, gcr, ll, lc, lr, cl, cc, cr, incC)
+            start = time.time()
+            T = update_MPS(self.d, tau, U_r, U_i, glc, gcr, ll, lc, lr, cl, cc, cr, incC)
+            # print('T: ', T)
             # De-align (compact) T
             T = aligner.compact_data(True, 'T', T, min_charge_l, max_charge_l, min_charge_r, max_charge_r)
-            #print('T: ', T)
+            #print(T[0,0])
+            s.synchronize()
+            dt = time.time() - start
+            self.largest_T = max(dt, self.largest_T)
+            self.theta_time += dt
+            # print('T: ', T)
             
             # SVD
-            V, Lambda, W = np.linalg.svd(T, full_matrices = False)
-            T, V, W = map(cp.array, [T, V, W])
+            start = time.time()
+            V, Lambda, W = np.linalg.svd(cp.asnumpy(T), full_matrices = False)
+            s.synchronize()
+            V, W = map(cp.array, [V, W])
+            self.svd_time += time.time() - start
 
             # Store new results
             new_Gamma_L = new_Gamma_L + [V[:, i] for i in range(len(Lambda))]
@@ -215,6 +251,8 @@ class MPS:
             new_charge = cp.append(new_charge, cp.repeat(cp.array(tau, dtype=int_type), len(Lambda)))
             tau_array.append(len(Lambda))
         
+        start = time.time()
+
         # Number of singular values to save
         num_lambda = int(min((new_Lambda > errtol).sum(), self.chi))
         # cupy behavior differs from numpy, the case of 0 length cupy array must be separately taken care of
@@ -272,13 +310,19 @@ class MPS:
         # Selecting and sorting Lambda
         new_Lambda = new_Lambda[idx_select]
         new_Lambda = new_Lambda[idx_sort]
-        #print(np.max(new_Lambda))
+
+        if new_Lambda.shape[0] == 0:
+            print(0)
+        else:
+            print(np.max(new_Lambda))
+
         LC[:num_lambda] = new_Lambda
         LC[num_lambda:] = 0
 
          # Sorting Gamma
         Gamma1Out[:, :num_lambda] = Gamma1Out[:, idx_sort]
         Gamma2Out[:num_lambda] = Gamma2Out[idx_sort]
+        #print('Gamma: ', Gamma1Out, Gamma2Out)
         if location == left:
             self.dGamma[0, 0, :] = Gamma1Out[0, :]; self.dGamma[1, :, :] = Gamma2Out
         elif location == right:
@@ -286,6 +330,9 @@ class MPS:
         else:
             self.dGamma[l, :, :] = Gamma1Out; self.dGamma[l + 1, :, :] = Gamma2Out
         
+        #print(self.dGamma[0,0,0])
+        self.other_time += time.time() - start
+
 
     def RCS1DOneCycleUpdate(self, k):
         if k < self.n / 2:
@@ -299,7 +346,9 @@ class MPS:
                 else:
                     T = my_cv.rvs(2 * k + 2, temp2)
                     temp2 += 2
+                start = time.time()
                 self.MPStwoqubitUpdate(l, np.sqrt(1 - T))
+                self.update_time += time.time() - start
                 l -= 1
         else:
             temp1 = 2 * self.n - (2 * k + 3)
@@ -312,20 +361,22 @@ class MPS:
                 else:
                     T = my_cv.rvs(2 * self.n - (2 * k + 1), temp2)
                     temp2 += 2
+                start = time.time()
                 self.MPStwoqubitUpdate(l, np.sqrt(1 - T))
+                self.update_time += time.time() - start
                 l -= 1;   
         print('One cycle')
         
     def RCS1DMultiCycle(self):
         self.MPSInitialization()
-        self.TotalProbPar[0] = self.TotalProbFromMPS()
+        #self.TotalProbPar[0] = self.TotalProbFromMPS()
         
-        self.EEPar[:, 0] = self.MPSEntanglementEntropy()
+        #self.EEPar[:, 0] = self.MPSEntanglementEntropy()
         
         for k in range(self.n - 1):
             self.RCS1DOneCycleUpdate(k)
-            self.TotalProbPar[k + 1] = self.TotalProbFromMPS()
-            self.EEPar[:, k + 1] = self.MPSEntanglementEntropy()
+            #self.TotalProbPar[k + 1] = self.TotalProbFromMPS()
+            #self.EEPar[:, k + 1] = self.MPSEntanglementEntropy()
     
         
         return self.TotalProbPar, self.EEPar#, self.REPar
@@ -415,7 +466,7 @@ class my_pdf(rv_continuous):
 my_cv = my_pdf(a = 0, b = 1, name='my_pdf')
 
 if __name__ == "__main__":
-    m_array = [2]#, 4, 6 ,8, 10, 12, 14, 16, 18, 20];
+    m_array = [8]#, 4, 6 ,8, 10, 12, 14, 16, 18, 20];
     EE_tot = []
     for m in m_array:
         start = time.time()
@@ -426,4 +477,4 @@ if __name__ == "__main__":
             Totprob, EE = boson.RCS1DMultiCycle()
             EE_temp += EE
         EE_tot.append(EE_temp / 100)
-        print("m: {}, Time taken: {}.".format(m, time.time() - start))
+        print("m: {:.2f}. Total time: {:.2f}. Update time: {:.2f}. U time: {:.2f}. Theta time: {:.2f}. SVD time: {:.2f}. Align init time: {:.2f}. Align info time: {:.2f}. Index time: {:.2f}. Copy time: {:.2f}. Align time: {:.2f}. Other_time: {:.2f}. Largest array dimension: {:.2f}. Longest time for single matrix: {:.8f}".format(m, time.time()-start, boson.update_time, boson.U_time, boson.theta_time, boson.svd_time, boson.align_init_time, boson.align_info_time, boson.index_time, boson.copy_time, boson.align_time, boson.other_time, boson.largest_C, boson.largest_T))

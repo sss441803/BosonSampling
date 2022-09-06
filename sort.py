@@ -1,5 +1,6 @@
 import numpy as np
 import cupy as cp
+import time
 
 
 class Aligner(object):
@@ -12,13 +13,26 @@ class Aligner(object):
         self.CC = CC
         self.CR = CR
 
-        self.incL = self.get_charge_beginning_index(self.d, self.CL)
-        self.sizeNewL, self.idxNewL, self.idxInvL, self.incNewL, self.cNewL = self.align_info(self.chi, self.incL)
+        self.align_info_time = 0
+        self.index_time = 0
 
+        start = time.time()
+        self.incL = self.get_charge_beginning_index(self.d, self.CL)
+        self.index_time += time.time() - start
+        start = time.time()
+        self.sizeNewL, self.idxNewL, self.idxInvL, self.incNewL, self.cNewL = self.align_info(self.chi, self.incL)
+        self.align_info_time += time.time() - start
+
+        start = time.time()
         self.incC = self.get_charge_beginning_index(self.d, self.CC)
-        
+        self.index_time += time.time() - start
+
+        start = time.time()
         self.incR = self.get_charge_beginning_index(self.d, self.CR)
+        self.index_time += time.time() - start
+        start = time.time()
         self.sizeNewR, self.idxNewR, self.idxInvR, self.incNewR, self.cNewR = self.align_info(self.chi, self.incR)
+        self.align_info_time += time.time() - start
 
 
     # Align given data
@@ -167,6 +181,7 @@ class Aligner(object):
     @staticmethod
     def get_charge_beginning_index(d: int, charges: np.ndarray):
 
+        charges = cp.asnumpy(charges)
         size = charges.shape[0]
         inc = - np.ones(d + 1, dtype=charges.dtype) # Includes terminating charge value d.
         inc[d] = size # Initialize terminating charge increment index as the full size
