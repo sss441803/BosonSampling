@@ -1,4 +1,12 @@
-'''Full simulation code containing the Device method (cupy, unified update)'''
+'''
+Full simulation code containing the Device method (cupy, unified update)
+To run:
+nvidia-cuda-mps-control -d
+ps -ef | grep mps
+python -u MPS_BS_cupy.py > results1.out & python -u MPS_BS_cupy.py > results2.out & python -u MPS_BS_cupy.py > results3.out & python -u MPS_BS_cupy.py > results4.out & python -u MPS_BS_cupy.py > results5.out & python -u MPS_BS_cupy.py > results6.out & python -u MPS_BS_cupy.py > results7.out & python -u MPS_BS_cupy.py > results8.out
+echo quit | nvidia-cuda-mps-control
+'''
+
 import numpy as np
 import cupy as cp
 
@@ -10,7 +18,7 @@ import time
 from cuda_kernels import update_MPS, Rand_U
 from sort import Aligner
 
-np.random.seed(1)
+#np.random.seed(1)
 np.set_printoptions(precision=3)
 s = cp.cuda.Stream()
 
@@ -239,9 +247,9 @@ class MPS:
             
             # SVD
             start = time.time()
-            V, Lambda, W = np.linalg.svd(cp.asnumpy(T), full_matrices = False)
+            V, Lambda, W = cp.linalg.svd(T, full_matrices = False)
             s.synchronize()
-            V, W = map(cp.array, [V, W])
+            #V, W = map(cp.array, [V, W])
             self.svd_time += time.time() - start
 
             # Store new results
@@ -466,13 +474,13 @@ class my_pdf(rv_continuous):
 my_cv = my_pdf(a = 0, b = 1, name='my_pdf')
 
 if __name__ == "__main__":
-    m_array = [8]#, 4, 6 ,8, 10, 12, 14, 16, 18, 20];
+    m_array = [10]#, 4, 6 ,8, 10, 12, 14, 16, 18, 20];
     EE_tot = []
     for m in m_array:
         start = time.time()
         EE_temp = np.zeros((31, 32))
         for i in range(1):
-            NumSample = 1; n = 32; chi = 2 ** m; errtol = 10 ** (-5)
+            NumSample = 1; n = 32; chi = 2**m; errtol = 10 ** (-5)
             boson = MPS(n, m, chi, errtol)
             Totprob, EE = boson.RCS1DMultiCycle()
             EE_temp += EE
