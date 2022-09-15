@@ -60,6 +60,33 @@ def update_MPS(d, tau, U_r, U_i, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC):
     return T_r + 1j*T_i
 
 
+update_MPO_kernel_file = open('update_MPO_kernel.cu')
+update_MPO_kernel_string = update_MPO_kernel_file.read()
+update_MPO_kernel_file.close()
+# Definition of the kernel
+update_mpo = cp.RawKernel(update_MPO_kernel_string, 'kernel', backend='nvcc')
+
+def update_MPO(d, charge_c_0, charge_c_1, U_r, U_i, glc_obj, gcr_obj, cl_obj, cr_obj, change_charges_C, change_idx_C):
+
+    changes = change_idx_C.shape[0]
+
+    Glc_r = cp.ascontiguousarray(cp.real(glc_obj.data), np.float32)
+    Glc_i = cp.ascontiguousarray(cp.imag(glc_obj.data), np.float32)
+    Gcr_r = cp.ascontiguousarray(cp.real(gcr_obj.data), np.float32)
+    Gcr_i = cp.ascontiguousarray(cp.imag(gcr_obj.data), np.float32)
+    cl0, cl1, cr0, cr1, chcC0, chcC1, idxcC = map(cp.ascontiguousarray, [cl_obj.data[:, 0], cl_obj.data[:, 1], cr_obj.data[:, 0], cr_obj.data[:, 1], change_charges_C[0], change_charges_C[1], change_idx_C])
+
+    len_l = Glc_r.shape[0]
+    len_c = Glc_r.shape[1]
+    len_r = Gcr_r.shape[1]
+    grid = ((len_r + 63) // 64, (len_l + 127) // 128, 1)
+    T_r = cp.zeros([len_l, len_r], dtype = np.float32)
+    T_i = cp.zeros([len_l, len_r], dtype = np.float32)
+    update_mpo(grid, (256, 1, 1), (d, charge_c_0, charge_c_1, U_r, U_i, Glc_r, Glc_i, Gcr_r, Gcr_i, cl0, cl1, cr0, cr1, changes, chcC0, chcC1, idxcC, T_r, T_i, len_l, len_r, len_c, int(len_c * 4), int(len_r * 32)))
+
+    return T_r + 1j*T_i
+
+
 data_type = np.float32
 
 if __name__ == '__main__':
