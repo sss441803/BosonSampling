@@ -48,9 +48,9 @@ class Aligner(object):
         # filling 0 and the rest of the indices are increased by 1. Hence we are appending
         # a 0 to the beginning of the original array before indexing.
         if array_type in ['ll','Ll','LL']:
-            return backend.append(np.zeros(1, dtype=data.dtype), data)[self.idxNewL]
+            return backend.append(backend.zeros(1, dtype=data.dtype), data)[self.idxNewL]
         elif array_type in ['lr','Lr','LR']:
-            return backend.append(np.zeros(1, dtype=data.dtype), data)[self.idxNewR]
+            return backend.append(backend.zeros(1, dtype=data.dtype), data)[self.idxNewR]
         elif array_type in ['glc','Glc','GLC']:
             return backend.vstack( [backend.zeros(self.chi, dtype=data.dtype), data] )[self.idxNewL]
         elif array_type in ['gcr','Gcr','GCR']:
@@ -181,7 +181,6 @@ class Aligner(object):
     @staticmethod
     def get_charge_beginning_index(d: int, charges: np.ndarray):
 
-        charges = cp.asnumpy(charges)
         size = charges.shape[0]
         inc = - np.ones(d + 1, dtype=charges.dtype) # Includes terminating charge value d.
         inc[d] = size # Initialize terminating charge increment index as the full size

@@ -108,22 +108,22 @@ class MPS:
         self.largest_T = 0
         
     def MPSInitialization(self):
-        self.dGamma = cp.zeros([self.n, self.chi, self.chi], dtype=data_type); # modes, alpha, alpha
-        self.dLambda = cp.zeros([self.n - 1, self.chi], dtype=float_type); # modes - 1, alpha
-        self.dLambda_edge = cp.ones(self.chi, dtype=float_type) # edge lambda (for first and last site) don't exists and are ones
-        self.dcharge = self.d * cp.ones([self.n + 1, self.chi], dtype=int_type) # Initialize initial charges for all bonds to the impossible charge d.
+        self.Gamma = np.zeros([self.n, self.chi, self.chi], dtype=data_type); # modes, alpha, alpha
+        self.Lambda = np.zeros([self.n - 1, self.chi], dtype=float_type); # modes - 1, alpha
+        self.Lambda_edge = np.ones(self.chi, dtype=float_type) # edge lambda (for first and last site) don't exists and are ones
+        self.charge = self.d * np.ones([self.n + 1, self.chi], dtype=int_type) # Initialize initial charges for all bonds to the impossible charge d.
         
         # Initialize the first bond
         # At the beginning, only the first bond is initialized to non-trivial information
         for i in range(self.n):
-            self.dGamma[i, 0, 0] = 1 
+            self.Gamma[i, 0, 0] = 1 
         
         for i in range(self.n - 1):
-            self.dLambda[i, 0] = 1
+            self.Lambda[i, 0] = 1
         
-        self.dcharge[:, 0] = 0 # First bond has charge zero
+        self.charge[:, 0] = 0 # First bond has charge zero
         for i in range(self.m):
-            self.dcharge[i, 0] = self.m - i # Since each mode has a photon for the first m modes, the charge number (photons to the right) increases by one per site
+            self.charge[i, 0] = self.m - i # Since each mode has a photon for the first m modes, the charge number (photons to the right) increases by one per site
 
     # Gives the range of left, center and right hand side charge values when center charge is fixed to tau
     def charge_range(self, location, tau):
@@ -152,7 +152,7 @@ class MPS:
         # Initializing unitary matrix on GPU
         np.random.seed(seed)
         start = time.time()
-        U_r, U_i = Rand_U(self.d, r)
+        d_U_r, d_U_i = Rand_U(self.d, r)
         s.synchronize()
         #print(U_r[0,0,0])
         self.U_time += time.time() - start
@@ -163,27 +163,27 @@ class MPS:
         right = "Right"
         if l == 0:
             location = left
-            LL = self.dLambda_edge[:]
-            LC = self.dLambda[l,:]
-            LR = self.dLambda[l+1,:]
+            LL = self.Lambda_edge[:]
+            LC = self.Lambda[l,:]
+            LR = self.Lambda[l+1,:]
         elif l == self.n - 2:
             location = right
-            LL = self.dLambda[l-1,:]
-            LC = self.dLambda[l,:]
-            LR = self.dLambda_edge[:]
+            LL = self.Lambda[l-1,:]
+            LC = self.Lambda[l,:]
+            LR = self.Lambda_edge[:]
         else:
             location = center
-            LL = self.dLambda[l-1,:]
-            LC = self.dLambda[l,:]
-            LR = self.dLambda[l+1,:]
+            LL = self.Lambda[l-1,:]
+            LC = self.Lambda[l,:]
+            LR = self.Lambda[l+1,:]
         
-        Glc = self.dGamma[l,:]
-        Gcr = self.dGamma[l+1,:]
+        Glc = self.Gamma[l,:]
+        Gcr = self.Gamma[l+1,:]
 
         # charge of corresponding index (bond charge left/center/right)
-        CL = self.dcharge[l,:]
-        CC = self.dcharge[l+1,:]
-        CR = self.dcharge[l+2,:]
+        CL = self.charge[l,:]
+        CC = self.charge[l+1,:]
+        CR = self.charge[l+2,:]
 
         start = time.time()
         # Creating aligner according to left and right charges. Will be used for algning, de-aligning (compacting), selecting data, etc.
@@ -193,18 +193,19 @@ class MPS:
         self.align_init_time += time.time() - start
         start = time.time()
         # Obtaining aligned charges
-        cNewL, cNewR, incC = map(cp.array, [aligner.cNewL, aligner.cNewR, aligner.incC])
+        d_cNewL, d_cNewR, d_incC = map(cp.array, [aligner.cNewL, aligner.cNewR, aligner.incC])
         self.copy_time = time.time() - start
         start = time.time()
         # Obtaining aligned data
         LL, LR, Glc, Gcr = map(aligner.align_data, ['LL','LR','Glc','Gcr'], [LL,LR,Glc,Gcr])
+        d_CC, d_LL, d_LC, d_LR, d_Glc, d_Gcr = map(cp.array, [CC, LL, LC, LR, Glc, Gcr])
         self.align_time += time.time() - start
 
         # Storage of generated data
-        new_Gamma_L = []
-        new_Gamma_R = []
-        new_Lambda = cp.array([], dtype=float_type)
-        new_charge = cp.array([], dtype=int_type)
+        d_new_Gamma_L = []
+        d_new_Gamma_R = []
+        new_Lambda = np.array([], dtype=float_type)
+        new_charge = np.array([], dtype=int_type)
         tau_array = [0]
 
         for tau in range(self.d):
@@ -214,12 +215,12 @@ class MPS:
             # Bounds for data selection. Given tau (center charge), find the range of possible charges for left, center and right.
             min_charge_l, max_charge_l, min_charge_c, max_charge_c, min_charge_r, max_charge_r = self.charge_range(location, tau)
             # Selecting data according to charge bounds
-            cl, cc, cr, ll, lc, lr = map(aligner.select_data, [True]*6, ['cl','cc','cr','ll','lc','lr'], [cNewL,CC,cNewR,LL,LC,LR], [min_charge_l, min_charge_c, min_charge_r]*2, [max_charge_l, max_charge_c, max_charge_r]*2)
-            glc = aligner.select_data(True, 'glc', Glc, min_charge_l, max_charge_l, min_charge_c, max_charge_c)
-            gcr = aligner.select_data(True, 'gcr', Gcr, min_charge_c, max_charge_c, min_charge_r, max_charge_r)
+            d_cl, d_cc, d_cr, d_ll, d_lc, d_lr = map(aligner.select_data, [True]*6, ['cl','cc','cr','ll','lc','lr'], [d_cNewL,d_CC,d_cNewR,d_LL,d_LC,d_LR], [min_charge_l, min_charge_c, min_charge_r]*2, [max_charge_l, max_charge_c, max_charge_r]*2)
+            d_glc = aligner.select_data(True, 'glc', d_Glc, min_charge_l, max_charge_l, min_charge_c, max_charge_c)
+            d_gcr = aligner.select_data(True, 'gcr', d_Gcr, min_charge_c, max_charge_c, min_charge_r, max_charge_r)
 
             # Skip if any selection must be empty
-            len_l, len_r = cl.shape[0], cr.shape[0]
+            len_l, len_r = d_cl.shape[0], d_cr.shape[0]
             self.largest_C = max(max(len_l, len_r), self.largest_C)
             if len_l*len_r == 0:
                 tau_array.append(0)
@@ -227,36 +228,28 @@ class MPS:
 
             self.align_time += time.time() - start
 
-            # Computes Theta matrix
-            # print('inputs: ', self.d, tau, U, cl, cc, cr, ll, glc, lc, gcr, lr)
-            #T = loop(self.d, tau, U, cl, cc, cr, ll, glc, lc, gcr, lr)
-            # if tau == 0 and cc.shape[0] == 1:
-            #     print(tau, U.shape, glc.shape, gcr.shape, ll.shape, lc.shape, lr.shape, cl.shape, cc.shape, cr.shape, incC.shape)
-            #     print(self.d, tau, U, glc, gcr, ll, lc, lr, cl, cc, cr, incC)
             start = time.time()
-            T = update_MPS(self.d, tau, U_r, U_i, glc, gcr, ll, lc, lr, cl, cc, cr, incC)
-            # print('T: ', T)
-            # De-align (compact) T
-            T = aligner.compact_data(True, 'T', T, min_charge_l, max_charge_l, min_charge_r, max_charge_r)
-            #print(T[0,0])
+            #print('U_r: {}, U_i: {}, glc: {}, gcr: {}, ll: {}, lc: {}, lr: {}, cl: {}, cc: {}, cr: {}, incC: {}.'.format(*map(type, [d_U_r, d_U_i, d_glc, d_gcr, d_ll, d_lc, d_lr, d_cl, d_cc, d_cr, d_incC])))
+            d_T = update_MPS(self.d, tau, d_U_r, d_U_i, d_glc, d_gcr, d_ll, d_lc, d_lr, d_cl, d_cc, d_cr, d_incC)
+            d_T = aligner.compact_data(True, 'T', d_T, min_charge_l, max_charge_l, min_charge_r, max_charge_r)
             s.synchronize()
             dt = time.time() - start
             self.largest_T = max(dt, self.largest_T)
             self.theta_time += dt
-            # print('T: ', T)
             
             # SVD
             start = time.time()
-            V, Lambda, W = cp.linalg.svd(T, full_matrices = False)
+            d_V, d_Lambda, d_W = cp.linalg.svd(d_T, full_matrices = False)
+            Lambda = cp.asnumpy(d_Lambda)
             s.synchronize()
             #V, W = map(cp.array, [V, W])
             self.svd_time += time.time() - start
 
             # Store new results
-            new_Gamma_L = new_Gamma_L + [V[:, i] for i in range(len(Lambda))]
-            new_Gamma_R = new_Gamma_R + [W[i, :] for i in range(len(Lambda))]
-            new_Lambda = cp.append(new_Lambda, Lambda)
-            new_charge = cp.append(new_charge, cp.repeat(cp.array(tau, dtype=int_type), len(Lambda)))
+            d_new_Gamma_L = d_new_Gamma_L + [d_V[:, i] for i in range(len(Lambda))]
+            d_new_Gamma_R = d_new_Gamma_R + [d_W[i, :] for i in range(len(Lambda))]
+            new_Lambda = np.append(new_Lambda, Lambda)
+            new_charge = np.append(new_charge, np.repeat(np.array(tau, dtype=int_type), len(Lambda)))
             tau_array.append(len(Lambda))
         
         start = time.time()
@@ -265,19 +258,19 @@ class MPS:
         num_lambda = int(min((new_Lambda > errtol).sum(), self.chi))
         # cupy behavior differs from numpy, the case of 0 length cupy array must be separately taken care of
         if num_lambda!= 0:
-            idx_select = cp.argpartition(new_Lambda, -num_lambda)[-num_lambda:] # Indices of the largest num_lambda singular values
+            idx_select = np.argpartition(new_Lambda, -num_lambda)[-num_lambda:] # Indices of the largest num_lambda singular values
         else:
-            idx_select = cp.array([], dtype=int_type)
+            idx_select = np.array([], dtype=int_type)
         
         # Initialize selected and sorted Gamma outputs
-        Gamma1Out = cp.zeros([self.chi, self.chi], dtype = data_type)
-        Gamma2Out = cp.zeros([self.chi, self.chi], dtype = data_type)
+        Gamma1Out = np.zeros([self.chi, self.chi], dtype = data_type)
+        Gamma2Out = np.zeros([self.chi, self.chi], dtype = data_type)
 
         # Indices of eigenvalues that mark the beginning of center charge tau
         cum_tau_array = np.cumsum(tau_array)
         # Since division by Lambda, if Lambda is 0, output should be 0.
-        LL[cp.where(LL == 0)[0]] = 999999999999
-        LR[cp.where(LR == 0)[0]] = 999999999999
+        LL[np.where(LL == 0)[0]] = 999999999999
+        LR[np.where(LR == 0)[0]] = 999999999999
         
         # Need to loop through center charges to select (bonds corresponds to the largest singular values) saved Gammas to output gammas
         for tau in range(self.d): # charge at center
@@ -288,15 +281,16 @@ class MPS:
 
             # Finding bond indices (tau_idx) that are in the largest num_lambda singular values and for center charge tau.
             # idx_select[indices] = tau_idx
-            tau_idx, indices, _ = np.intersect1d(cp.asnumpy(idx_select), np.arange(cum_tau_array[tau], cum_tau_array[tau + 1]), return_indices = True)
+            tau_idx, indices, _ = np.intersect1d(idx_select, np.arange(cum_tau_array[tau], cum_tau_array[tau + 1]), return_indices = True)
 
             if len(tau_idx) * gamma1out.shape[0] * gamma2out.shape[1] == 0:
                 continue
 
             # Left and right singular vectors that corresponds to the largest num_lambda singular values and center charge tau
-            V = cp.array([new_Gamma_L[i] for i in tau_idx], dtype=data_type)
-            W = cp.array([new_Gamma_R[i] for i in tau_idx], dtype=data_type)
-            V = V.T
+            d_V = cp.array([d_new_Gamma_L[i] for i in tau_idx], dtype=data_type)
+            d_W = cp.array([d_new_Gamma_R[i] for i in tau_idx], dtype=data_type)
+            d_V = d_V.T
+            V, W = map(cp.asnumpy, [d_V, d_W])
 
             # Calculating output gamma
             # Left
@@ -309,7 +303,7 @@ class MPS:
         # Select charges that corresponds to the largest num_lambda singular values
         new_charge = new_charge[idx_select]
         # Sort the new charges
-        idx_sort = cp.argsort(new_charge) # Indices that will sort the new charges
+        idx_sort = np.argsort(new_charge) # Indices that will sort the new charges
         new_charge = new_charge[idx_sort]
         # Update charges (modifying CC modifies self.dcharge by pointer)
         CC[:num_lambda] = new_charge
@@ -332,11 +326,11 @@ class MPS:
         Gamma2Out[:num_lambda] = Gamma2Out[idx_sort]
         #print('Gamma: ', Gamma1Out, Gamma2Out)
         if location == left:
-            self.dGamma[0, 0, :] = Gamma1Out[0, :]; self.dGamma[1, :, :] = Gamma2Out
+            self.Gamma[0, 0, :] = Gamma1Out[0, :]; self.Gamma[1, :, :] = Gamma2Out
         elif location == right:
-            self.dGamma[self.n - 2, :, :] = Gamma1Out; self.dGamma[self.n - 1, :, 0] = Gamma2Out[:, 0]
+            self.Gamma[self.n - 2, :, :] = Gamma1Out; self.Gamma[self.n - 1, :, 0] = Gamma2Out[:, 0]
         else:
-            self.dGamma[l, :, :] = Gamma1Out; self.dGamma[l + 1, :, :] = Gamma2Out
+            self.Gamma[l, :, :] = Gamma1Out; self.Gamma[l + 1, :, :] = Gamma2Out
         
         #print(self.dGamma[0,0,0])
         self.other_time += time.time() - start
@@ -393,12 +387,12 @@ class MPS:
         # Gamma (chi, chi, d, n) # Gamma1 first component is blank
         # Lambda3 (chi, n)
         
-        sq_lambda = np.sum(self.dLambda ** 2, axis = 1)
+        sq_lambda = np.sum(self.Lambda ** 2, axis = 1)
         return np.average(sq_lambda)
     
     
     def MPSEntanglementEntropy(self):
-        sq_lambda = np.copy(self.dLambda ** 2)
+        sq_lambda = np.copy(self.Lambda ** 2)
         Output = np.zeros([self.n - 1])
 
         for i in range(self.n - 1):
@@ -474,7 +468,7 @@ class my_pdf(rv_continuous):
 my_cv = my_pdf(a = 0, b = 1, name='my_pdf')
 
 if __name__ == "__main__":
-    m_array = [10]#, 4, 6 ,8, 10, 12, 14, 16, 18, 20];
+    m_array = [12]#, 4, 6 ,8, 10, 12, 14, 16, 18, 20];
     EE_tot = []
     for m in m_array:
         start = time.time()
