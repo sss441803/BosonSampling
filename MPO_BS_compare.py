@@ -10,21 +10,27 @@ from itertools import combinations
 from multiprocessing import Pool
 
 from mpo_sort import Aligner
+from cuda_kernels import Rand_MPO_U, update_MPO
 
 np.random.seed(1)
 np.set_printoptions(precision=3)
+
+s = cp.cuda.Stream()
+s1 = cp.cuda.Stream(non_blocking=True)
 
 data_type = np.complex64
 float_type = np.float32
 int_type = np.int32
 
-def update_MPO(d, charge_c_0, charge_c_1, U, glc_obj, gcr_obj, cl_obj, cc_obj, cr_obj, change_charges_C, change_idx_C):
+def update_MPO_numpy(d, charge_c_0, charge_c_1, U_r, U_i, glc_obj, gcr_obj, cl_obj, cr_obj, change_charges_C, change_idx_C):
 
     charge_id_max = change_idx_C.shape[0]
 
     charge_c = charge_c_0 * d + charge_c_1
 
-    glc, gcr, cl, cc, cr = glc_obj.data, gcr_obj.data, cl_obj.data, cc_obj.data, cr_obj.data
+    U = U_r + 1j*U_i
+
+    glc, gcr, cl, cr = glc_obj.data, gcr_obj.data, cl_obj.data, cr_obj.data
 
     M, K, N = glc.shape[0], glc.shape[1], gcr.shape[1]
 
@@ -70,8 +76,11 @@ def Rand_U(d, r):
             for l in range(max(0, n + m + 1 - d), min(d, n + m + 1)): #photon number on first output mode
                 k = np.arange(max(0, l - m), min(l + 1, n + 1, d))
                 U[n, m, l, n + m - l] = np.sum(bs_coeff(n, m, k, l))
+
+    U = np.kron(U, np.conj(U))
+    U_r, U_i = np.real(U), np.imag(U)
     
-    return np.kron(U, np.conj(U))
+    return U_r, U_i
 
 def f(m, k, *arg):
     temp = np.zeros([m], dtype = 'int')
@@ -251,8 +260,9 @@ class MPO:
         # Initializing unitary matrix on GPU
         np.random.seed(seed)
         start = time.time()
-        U = Rand_U(self.d, r)
+        d_U_r, d_U_i = Rand_MPO_U(self.d, r)
         #print(U_r[0,0,0])
+        s.synchronize()
         self.U_time += time.time() - start
 
         # Determining the location of the two qubit gate
@@ -294,19 +304,19 @@ class MPO:
         cNewL_obj, cNewR_obj, change_charges_C, change_idx_C = aligner.cNewL, aligner.cNewR, aligner.change_charges_C, aligner.change_idx_C
         d_cNewL_obj, d_cNewR_obj = map(aligner.to_cupy, [cNewL_obj, cNewR_obj])
         #d_change_charges_C, d_change_idx_C = map(cp.array, [change_charges_C, change_idx_C])
-        d_change_charges_C, d_change_idx_C = change_charges_C, change_idx_C
+        d_change_charges_C, d_change_idx_C = cp.array(change_charges_C), cp.array(change_idx_C)
         self.copy_time = time.time() - start
         start = time.time()
         # Obtaining aligned data
-        CC_obj, LL_obj, LC_obj, LR_obj, Glc_obj, Gcr_obj = map(aligner.make_data_obj, ['CC','LL','LC','LR','Glc','Gcr'], [True]*6, [CC, LL, LC, LR, Glc, Gcr], [[0]]*4+[[0,0]]*2)
-        d_CC_obj, d_LL_obj, d_LC_obj, d_LR_obj, d_Glc_obj, d_Gcr_obj = map(aligner.to_cupy, [CC_obj, LL_obj, LC_obj, LR_obj, Glc_obj, Gcr_obj])
+        LL_obj, LR_obj, Glc_obj, Gcr_obj = map(aligner.make_data_obj, ['LL','LR','Glc','Gcr'], [True]*4, [LL, LR, Glc, Gcr], [ [0],[0],[0,0],[0,0] ])
+        d_LL_obj, d_LR_obj, d_Glc_obj, d_Gcr_obj = map(aligner.to_cupy, [LL_obj, LR_obj, Glc_obj, Gcr_obj])
         d_LL_obj, d_LR_obj, d_Glc_obj, d_Gcr_obj = map(aligner.align_data, [d_LL_obj, d_LR_obj, d_Glc_obj, d_Gcr_obj])
        
         self.align_time += time.time() - start
 
         # Storage of generated data
-        d_new_Gamma_L = []
-        d_new_Gamma_R = []
+        new_Gamma_L = []
+        new_Gamma_R = []
         new_Lambda = np.array([], dtype=float_type)
         new_charge_0 = np.array([], dtype=int_type)
         new_charge_1 = np.array([], dtype=int_type)
@@ -321,12 +331,9 @@ class MPO:
                 min_charge_l_0, max_charge_l_0, min_charge_c_0, max_charge_c_0, min_charge_r_0, max_charge_r_0 = self.charge_range(location, charge_c_0)
                 min_charge_l_1, max_charge_l_1, min_charge_c_1, max_charge_c_1, min_charge_r_1, max_charge_r_1 = self.charge_range(location, charge_c_1)
                 # Selecting data according to charge bounds
-                d_cl_obj, d_cc_obj, d_cr_obj, d_ll_obj, d_lc_obj, d_lr_obj = map(aligner.select_data,
-                                                                                [d_cNewL_obj, d_CC_obj, d_cNewR_obj, d_LL_obj, d_LC_obj, d_LR_obj],
-                                                                                [min_charge_l_0, min_charge_c_0, min_charge_r_0]*2,
-                                                                                [max_charge_l_0, max_charge_c_0, max_charge_r_0]*2,
-                                                                                [min_charge_l_1, min_charge_c_1, min_charge_r_1]*2,
-                                                                                [max_charge_l_1, max_charge_c_1, max_charge_r_1]*2)
+                d_cl_obj = aligner.select_data(d_cNewL_obj, min_charge_l_0, max_charge_l_0, min_charge_l_1, max_charge_l_1)
+                d_cr_obj = aligner.select_data(d_cNewR_obj, min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1)
+                d_lr_obj = aligner.select_data(d_LR_obj, min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1)
                 d_glc_obj = aligner.select_data(d_Glc_obj, min_charge_l_0, max_charge_l_0, min_charge_l_1, max_charge_l_1,
                                                            min_charge_c_0, max_charge_c_0, min_charge_c_1, max_charge_c_1)
                 d_gcr_obj = aligner.select_data(d_Gcr_obj, min_charge_c_0, max_charge_c_0, min_charge_c_1, max_charge_c_1,
@@ -341,39 +348,41 @@ class MPO:
 
                 start = time.time()
                 #print('glc: {}, gcr: {}, ll: {}, lc: {}, lr: {}, cl: {}, cc: {}, cr: {}.'.format(d_glc_obj.data, d_gcr_obj.data, d_ll_obj.data, d_lc_obj.data, d_lr_obj.data, d_cl_obj.data, d_cc_obj.data, d_cr_obj.data))
-                d_C_obj = update_MPO(self.d, charge_c_0, charge_c_1, U, d_glc_obj, d_gcr_obj, d_cl_obj, d_cc_obj, d_cr_obj, d_change_charges_C, d_change_idx_C)
+                d_C_obj = update_MPO(self.d, charge_c_0, charge_c_1, d_U_r, d_U_i, d_glc_obj, d_gcr_obj, d_cl_obj, d_cr_obj, d_change_charges_C, d_change_idx_C)
                 d_T_obj = d_C_obj.clone()
-                d_T_obj.data = np.multiply(d_C_obj.data, d_lr_obj.data)
+                d_T_obj.data = cp.multiply(d_C_obj.data, d_lr_obj.data)
                 d_C = aligner.compact_data(d_C_obj)
                 d_T = aligner.compact_data(d_T_obj)
                 #print('T: ', d_T)
-                # s.synchronize()
+                s.synchronize()
                 dt = time.time() - start
                 self.largest_T = max(dt, self.largest_T)
                 self.theta_time += dt
                 
                 # SVD
                 start = time.time()
-                d_V, d_Lambda, d_W = np.linalg.svd(d_T, full_matrices = False)
-                d_V = np.asarray(d_V)
-                d_Lambda = np.asarray(d_Lambda)
-                d_W = np.matmul(np.conj(d_V.T), d_C)
-                Lambda = d_Lambda
-                # Lambda = cp.asnumpy(d_Lambda)
-                # s.synchronize()
-                #V, W = map(cp.array, [V, W])
+                d_V, d_Lambda, d_W = cp.linalg.svd(d_T, full_matrices = False)
+                # d_V = cp.asarray(d_V)
+                # d_Lambda = cp.asarray(d_Lambda)
+                d_W = cp.matmul(cp.conj(d_V.T), d_C)
+                #Lambda = d_Lambda
+                Lambda = cp.asnumpy(d_Lambda)
+                s.synchronize()
                 self.svd_time += time.time() - start
 
-                # Store new results
-                #print('V: ', d_V)
-                d_new_Gamma_L = d_new_Gamma_L + [d_V[:, i] for i in range(len(Lambda))]
-                d_new_Gamma_R = d_new_Gamma_R + [d_W[i, :] for i in range(len(Lambda))]
+                with s1:
+                    V, W = map(cp.asnumpy, [d_V, d_W])
+                    # Store new results
+                    new_Gamma_L = new_Gamma_L + [V[:, i] for i in range(len(Lambda))]
+                    new_Gamma_R = new_Gamma_R + [W[i, :] for i in range(len(Lambda))]
+                
                 new_Lambda = np.append(new_Lambda, Lambda)
                 new_charge_0 = np.append(new_charge_0, np.repeat(np.array(charge_c_0, dtype=int_type), len(Lambda)))
                 new_charge_1 = np.append(new_charge_1, np.repeat(np.array(charge_c_1, dtype=int_type), len(Lambda)))
                 tau_array.append(len(Lambda))
         
         start = time.time()
+        s1.synchronize()
 
         # Number of singular values to save
         num_lambda = int(min(new_Lambda.shape[0], self.chi))
@@ -411,8 +420,9 @@ class MPO:
                 # d_W = cp.array([d_new_Gamma_R[i] for i in tau_idx], dtype=data_type)
                 # d_V = d_V.T
                 # V, W = map(cp.asnumpy, [d_V, d_W])
-                V = np.array([d_new_Gamma_L[i] for i in tau_idx], dtype = 'complex64')
-                W = np.array([d_new_Gamma_R[i] for i in tau_idx], dtype = 'complex64')
+                
+                V = np.array([new_Gamma_L[i] for i in tau_idx], dtype = 'complex64')
+                W = np.array([new_Gamma_R[i] for i in tau_idx], dtype = 'complex64')
                 V = V.T
 
                 # Calculating output gamma
@@ -464,6 +474,7 @@ class MPO:
 
 
     def RCS1DOneCycleUpdate(self, k):
+        
         if k < self.n / 2:
             temp1 = 2 * k + 1
             temp2 = 2
@@ -475,7 +486,9 @@ class MPO:
                 else:
                     T = my_cv.rvs(2 * k + 2, temp2)
                     temp2 += 2
+                start = time.time()
                 self.MPOtwoqubitUpdate(l, np.sqrt(1 - T))
+                self.update_time += time.time() - start
                 l -= 1
         else:
             temp1 = 2 * self.n - (2 * k + 3)
@@ -488,23 +501,26 @@ class MPO:
                 else:
                     T = my_cv.rvs(2 * self.n - (2 * k + 1), temp2)
                     temp2 += 2
+                start = time.time()
                 self.MPOtwoqubitUpdate(l, np.sqrt(1 - T))
+                self.update_time += time.time() - start
                 l -= 1    
+        
         
     def RCS1DMultiCycle(self):
         
         start = time.time()
 
         self.MPOInitialization()    
-        self.TotalProbPar[0] = self.TotalProbFromMPO()
-        self.EEPar[:, 0] = self.MPOEntanglementEntropy()
+        #self.TotalProbPar[0] = self.TotalProbFromMPO()
+        #self.EEPar[:, 0] = self.MPOEntanglementEntropy()
         
         for k in range(self.n - 1):
             self.RCS1DOneCycleUpdate(k)
-            self.TotalProbPar[k + 1] = self.TotalProbFromMPO()
-            self.EEPar[:, k + 1] = self.MPOEntanglementEntropy()
-        
-        print("m: {:.2f}. Total time: {:.2f}. Update time: {:.2f}. U time: {:.2f}. Theta time: {:.2f}. SVD time: {:.2f}. Align init time: {:.2f}. Align info time: {:.2f}. Index time: {:.2f}. Copy time: {:.2f}. Align time: {:.2f}. Other_time: {:.2f}. Largest array dimension: {:.2f}. Longest time for single matrix: {:.8f}".format(m, time.time()-start, self.update_time, self.U_time, self.theta_time, self.svd_time, self.align_init_time, self.align_info_time, self.index_time, self.copy_time, self.align_time, self.other_time, self.largest_C, self.largest_T))
+            #self.TotalProbPar[k + 1] = self.TotalProbFromMPO()
+            #self.EEPar[:, k + 1] = self.MPOEntanglementEntropy()
+            '''Initialial total time is much higher than simulation time due to initialization of cuda context.'''
+            print("m: {:.2f}. Total time (unreliable): {:.2f}. Update time: {:.2f}. U time: {:.2f}. Theta time: {:.2f}. SVD time: {:.2f}. Align init time: {:.2f}. Align info time: {:.2f}. Index time: {:.2f}. Copy time: {:.2f}. Align time: {:.2f}. Other_time: {:.2f}. Largest array dimension: {:.2f}. Longest time for single matrix: {:.8f}".format(m, time.time()-start, self.update_time, self.U_time, self.theta_time, self.svd_time, self.align_init_time, self.align_info_time, self.index_time, self.copy_time, self.align_time, self.other_time, self.largest_C, self.largest_T))
 
         return self.TotalProbPar, self.EEPar
     
@@ -577,8 +593,8 @@ def RCS1DMultiCycleAvg(NumSample, n, m, loss, chi):
 
 if __name__ == "__main__":
     EE_tot = []; prob_tot = []
-    for m in [2]:
-        NumSample = 1; n = 16; loss = 1 - 1.2 * m ** (1 / 2) / m
-        chi = 4
+    for m in [10]:
+        NumSample = 1; n = 32; loss = 1 - 1.2 * m ** (1 / 2) / m
+        chi = 2000
         
         Totprob, EE = RCS1DMultiCycleAvg(NumSample, n, m, loss, chi)

@@ -26,12 +26,11 @@ class Data(object):
         self.idx_select = idx_select
 
     def cupy(self):
-        pass
-        #self.data = cp.array(self.data)
+        self.data = cp.array(self.data)
 
     def numpy(self):
         if type(self.data) is cp._core.core.ndarray:
-            self.data = cp.asnumpy(self.data)
+           self.data = cp.asnumpy(self.data)
 
     def clone(self):
         return Data(self.array_type, self.aligned, self.data, self.idx_select)
@@ -61,8 +60,9 @@ class Aligner(object):
 
         start = time.time()
         _, incC_1 = self.get_charge_beginning_index(d, CC, absolute_index=True)
-        self.change_charges_C = np.array(np.where(incC_1 != -1), dtype='int32')
-        self.change_idx_C = np.array(incC_1[self.change_charges_C], dtype='int32)'
+        self.change_charges_C = np.where(incC_1 != -1)
+        self.change_idx_C = np.array(incC_1[self.change_charges_C], dtype='int32')
+        self.change_charges_C = np.array(self.change_charges_C, dtype='int32')
         self.index_time += time.time() - start
 
         start = time.time()
@@ -79,11 +79,11 @@ class Aligner(object):
         array_type = data_obj.array_type
         data = data_obj.data
         if type(data) is cp._core.core.ndarray:
-            backend = cp
+           backend = cp
         elif type(data) is np.ndarray:
-            backend = np
+           backend = np
         else:
-            raise TypeError("Data is not numpy or cupy array.")
+           raise TypeError("Data is not numpy or cupy array.")
         # idxNew makes aligned array by taking elemets from the original array.
         # Because it has to fill in empty spaces with 0, we decide to use index 0 for
         # filling 0 and the rest of the indices are increased by 1. Hence we are appending
@@ -389,11 +389,12 @@ class Aligner(object):
 
     @staticmethod
     def to_cupy(data_obj: Data):
-        data_obj.cupy()
-        return data_obj
+        d_data_obj = data_obj.clone()
+        d_data_obj.cupy()
+        return d_data_obj
 
     # Finding index boundaries to select from the full indices
-    def get_indices(self, first_charge_0: int, last_charge_0: int, first_charge_1: int, last_charge_1: int, side: str, aligned: bool) -> tuple[int, int]:
+    def get_indices(self, first_charge_0: int, last_charge_0: int, first_charge_1: int, last_charge_1: int, side: str, aligned: bool):# -> tuple[int, int]:
 
         if aligned:
             if side == 'left':

@@ -4,6 +4,8 @@ import numpy as np
 from math import sqrt, ceil, pi
 from cmath import exp
 
+from mpo_sort import Aligner
+
 # CUDA kernel for updating unitary
 u_kernel_file = open('u_kernel.cu')
 u_kernel_string = u_kernel_file.read()
@@ -29,6 +31,16 @@ def Rand_U(d: int, r: float):
     
     return U_r, U_i
 
+
+# Function generating random unitary on CUDA
+def Rand_MPO_U(d: int, r: float):
+    
+    U_r, U_i = Rand_U(d, r)
+
+    MPO_U_r = np.kron(U_r, U_r) + np.kron(U_i, U_i)
+    MPO_U_i = np.kron(U_i, U_r) - np.kron(U_r, U_i)
+    
+    return MPO_U_r, MPO_U_i
 
 
 # CUDA kernel for computing the Theta matrix (to be SVDed) for updating the MPS upon application of the unitary
@@ -60,6 +72,8 @@ def update_MPS(d, tau, U_r, U_i, Glc, Gcr, LL, LC, LR, CL, CC, CR, incC):
     return T_r + 1j*T_i
 
 
+# CUDA kernel for computing the Theta matrix (to be SVDed) for updating the MPO upon application of the unitary
+# Load kernel file
 update_MPO_kernel_file = open('update_MPO_kernel.cu')
 update_MPO_kernel_string = update_MPO_kernel_file.read()
 update_MPO_kernel_file.close()
@@ -80,11 +94,16 @@ def update_MPO(d, charge_c_0, charge_c_1, U_r, U_i, glc_obj, gcr_obj, cl_obj, cr
     len_c = Glc_r.shape[1]
     len_r = Gcr_r.shape[1]
     grid = ((len_r + 63) // 64, (len_l + 127) // 128, 1)
-    T_r = cp.zeros([len_l, len_r], dtype = np.float32)
-    T_i = cp.zeros([len_l, len_r], dtype = np.float32)
-    update_mpo(grid, (256, 1, 1), (d, charge_c_0, charge_c_1, U_r, U_i, Glc_r, Glc_i, Gcr_r, Gcr_i, cl0, cl1, cr0, cr1, changes, chcC0, chcC1, idxcC, T_r, T_i, len_l, len_r, len_c, int(len_c * 4), int(len_r * 32)))
+    C_r = cp.zeros([len_l, len_r], dtype = np.float32)
+    C_i = cp.zeros([len_l, len_r], dtype = np.float32)
 
-    return T_r + 1j*T_i
+    update_mpo(grid, (256, 1, 1), (d, charge_c_0, charge_c_1, U_r, U_i, Glc_r, Glc_i, Gcr_r, Gcr_i, cl0, cl1, cr0, cr1, changes, chcC0, chcC1, idxcC, C_r, C_i, len_l, len_r, len_c, int(len_c * 4), int(len_r * 32)))
+
+    C = C_r + 1j*C_i
+    idx_select = [glc_obj.idx_select[0], gcr_obj.idx_select[1]]
+    C_obj = Aligner.make_data_obj('T', True, C, idx_select)
+
+    return C_obj
 
 
 data_type = np.float32

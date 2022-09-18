@@ -462,11 +462,9 @@ void kernel(const int d,
     *  |---|---|---|---|---|---|---|
     *  | 0 |-1 | 3 | 5 | 6 |-1 | 8 | ...
     *  |---|---|---|---|---|---|---|            */
-    int c = 0;
+    c = 0;
     int charge_id = 0;
     int next_c = 0;
-    int charge_local_0;
-    int charge_local_1;
 
     // k_tiles loop
     for (int k_tile = k_tiles; k_tile > 0; --k_tile) {
