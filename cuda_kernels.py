@@ -3,6 +3,7 @@ import numpy as np
 
 from math import sqrt, ceil, pi
 from cmath import exp
+from scipy.special import factorial, comb
 
 from mpo_sort import Aligner
 
@@ -14,6 +15,21 @@ unitary = cp.RawKernel(u_kernel_string, 'unitary', backend='nvcc')
 
 # Function generating random unitary on CUDA
 def Rand_U(d: int, r: float):
+
+    if r == 0:
+        t = np.sqrt(1 - r ** 2) * np.exp(1j * np.random.rand() * 2 * np.pi);
+        r = r * np.exp(1j * np.random.rand() * 2 * np.pi);
+        ct = np.conj(t); cr = np.conj(r);
+        bs_coeff = lambda n, m, k, l: np.sqrt(factorial(l) * factorial(n + m - l) / factorial(n) / factorial(m)) * comb(n, k) * comb(m, l - k) * (t ** k) * (ct ** (m - l + k)) * (r ** (n - k)) * ((-cr) ** (l - k))
+        U = np.zeros([d, d, d], dtype = 'complex64');
+        for n in range(d): #photon number from 0 to d-1
+            for m in range(d):
+                for l in range(max(0, n + m + 1 - d), min(d, n + m + 1)): #photon number on first output mode
+                    k = np.arange(max(0, l - m), min(l + 1, n + 1, d))
+                    U[n, m, l] = np.sum(bs_coeff(n, m, k, l))
+        
+        return cp.array(np.real(U)), cp.array(np.imag(U))
+
     U_r = cp.zeros([d, d, d], dtype=np.float32)
     U_i = cp.zeros([d, d, d], dtype=np.float32)
     t = sqrt(1 - r ** 2) * exp(1j * np.random.rand() * 2 * pi)
@@ -28,7 +44,7 @@ def Rand_U(d: int, r: float):
     blockspergrid = (bpg, bpg, bpg)
     # Memory holder for the Unitaries
     unitary(blockspergrid, threadsperblock, (d, t_r, t_i, r_r, r_i, U_r, U_i))
-    
+        
     return U_r, U_i
 
 
@@ -37,8 +53,8 @@ def Rand_MPO_U(d: int, r: float):
     
     U_r, U_i = Rand_U(d, r)
 
-    MPO_U_r = np.kron(U_r, U_r) + np.kron(U_i, U_i)
-    MPO_U_i = np.kron(U_i, U_r) - np.kron(U_r, U_i)
+    MPO_U_r = cp.kron(U_r, U_r) + cp.kron(U_i, U_i)
+    MPO_U_i = cp.kron(U_i, U_r) - cp.kron(U_r, U_i)
     
     return MPO_U_r, MPO_U_i
 

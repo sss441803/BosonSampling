@@ -442,12 +442,14 @@ void kernel(const int d,
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
             if (cl0[i] >= 0 && 0 >= cr0[j] && cl0[i] != -1 && cr0[j] != -1 && cl1[i] >= 0 && 0 >= cr1[j] && cl1[i] != -1 && cr1[j] != -1) {
-                U_r_frag[i][j] = U_r[((cl0[i] - cc0) * d + cl1[i] - cc1) * d * d * d * d 
-                                    + ((cc0 - cr0[j]) * d + cc1 - cr1[j]) * d * d
-                                    + cl0[i] * d + cl1[i]];
-                U_i_frag[i][j] = U_i[((cl0[i] - cc0) * d + cl1[i] - cc1) * d * d * d * d 
-                                    + ((cc0 - cr0[j]) * d + cc1 - cr1[j]) * d * d
-                                    + cl0[i] * d + cl1[i]];
+                // U_r_frag[i][j] = U_r[((cl0[i] - cc0) * d + cl1[i] - cc1) * d * d * d * d 
+                //                     + ((cc0 - cr0[j]) * d + cc1 - cr1[j]) * d * d
+                //                     + cl0[i] * d + cl1[i]];
+                // U_i_frag[i][j] = U_i[((cl0[i] - cc0) * d + cl1[i] - cc1) * d * d * d * d 
+                //                     + ((cc0 - cr0[j]) * d + cc1 - cr1[j]) * d * d
+                //                     + cl0[i] * d + cl1[i]];
+                U_r_frag[i][j] = U_r[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i]] * U_r[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i]] + U_i[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i]] * U_i[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i]];
+                U_i_frag[i][j] = U_i[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i]] * U_r[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i]] - U_r[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i]] * U_i[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i]];
             }
             else { U_r_frag[i][j] = U_i_frag[i][j] = 0; }
         }
@@ -487,12 +489,8 @@ void kernel(const int d,
                     for (int i = 0; i < 2; ++i) {
                         for (int j = 0; j < 2; ++j) {
                             if (cl0[i] >= charge_local_0 && charge_local_0 >= cr0[j] && cl0[i] != -1 && cr0[j] != -1 && cl1[i] >= charge_local_1 && charge_local_1 >= cr1[j] && cl1[i] != -1 && cr1[j] != -1) {
-                                U_r_frag[i][j] = U_r[((cl0[i] - cc0) * d + cl1[i] - cc1) * d * d * d * d 
-                                                    + ((cc0 - cr0[j]) * d + cc1 - cr1[j]) * d * d
-                                                    + (cl0[i] - charge_local_0) * d + cl1[i] - charge_local_1];
-                                U_i_frag[i][j] = U_i[((cl0[i] - cc0) * d + cl1[i] - cc1) * d * d * d * d 
-                                                    + ((cc0 - cr0[j]) * d + cc1 - cr1[j]) * d * d
-                                                    + (cl0[i] - charge_local_0) * d + cl1[i] - charge_local_1];
+                                U_r_frag[i][j] = U_r[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i] - charge_local_0] * U_r[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i] - charge_local_1] + U_i[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i] - charge_local_0] * U_i[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i] - charge_local_1];
+                                U_i_frag[i][j] = U_i[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i] - charge_local_0] * U_r[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i] - charge_local_1] - U_r[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i] - charge_local_0] * U_i[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i] - charge_local_1];
                             }
                             else { U_r_frag[i][j] = U_i_frag[i][j] = 0; }
                         }
@@ -622,12 +620,8 @@ void kernel(const int d,
             for (int i = 0; i < 2; ++i) {
                 for (int j = 0; j < 2; ++j) {
                     if (cl0[i] >= charge_local_0 && charge_local_0 >= cr0[j] && cl0[i] != -1 && cr0[j] != -1 && cl1[i] >= charge_local_1 && charge_local_1 >= cr1[j] && cl1[i] != -1 && cr1[j] != -1) {
-                        U_r_frag[i][j] = U_r[((cl0[i] - cc0) * d + cl1[i] - cc1) * d * d * d * d 
-                                            + ((cc0 - cr0[j]) * d + cc1 - cr1[j]) * d * d
-                                            + (cl0[i] - charge_local_0) * d + cl1[i] - charge_local_1];
-                        U_i_frag[i][j] = U_i[((cl0[i] - cc0) * d + cl1[i] - cc1) * d * d * d * d 
-                                            + ((cc0 - cr0[j]) * d + cc1 - cr1[j]) * d * d
-                                            + (cl0[i] - charge_local_0) * d + cl1[i] - charge_local_1];
+                        U_r_frag[i][j] = U_r[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i] - charge_local_0] * U_r[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i] - charge_local_1] + U_i[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i] - charge_local_0] * U_i[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i] - charge_local_1];
+                        U_i_frag[i][j] = U_i[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i] - charge_local_0] * U_r[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i] - charge_local_1] - U_r[(cl0[i] - cc0) * d * d + (cc0 - cr0[j]) * d + cl0[i] - charge_local_0] * U_i[(cl1[i] - cc1) * d * d + (cc1 - cr1[j]) * d + cl1[i] - charge_local_1];
                     }
                     else { U_r_frag[i][j] = U_i_frag[i][j] = 0; }
                 }

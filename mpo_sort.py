@@ -38,9 +38,9 @@ class Data(object):
 
 class Aligner(object):
 
-    def __init__(self, d: int, chi: int, CL: np.ndarray, CC: np.ndarray, CR: np.ndarray) -> None:
+    def __init__(self, d: int, CL: np.ndarray, CC: np.ndarray, CR: np.ndarray) -> None:
         self.d = d
-        self.chi = chi
+        self.chi = CL.shape[0]
 
         self.CL = self.make_data_obj('CL', True, CL, [0])
         self.CC = self.make_data_obj('CC', True, CC, [0])
@@ -169,7 +169,7 @@ class Aligner(object):
             raise ValueError("Only None or all first_charge_left/right_0/1 must be specified.")
 
 
-        # Select data based on smallest and largest charges
+    # Select data based on smallest and largest charges
     def get_select_index(self, data_obj: Data, first_charge_0: int, last_charge_0: int, first_charge_1: int, last_charge_1: int, first_charge_another_0: int = None, last_charge_another_0: int = None, first_charge_another_1: int = None, last_charge_another_1: int = None):
 
         aligned = data_obj.aligned
