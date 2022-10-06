@@ -11,6 +11,7 @@ from cuda_kernels import Rand_U, update_MPO
 import time
 import argparse
 import os
+import gc
 
 mempool = cp.get_default_memory_pool()
 # mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
@@ -217,6 +218,15 @@ class MPO:
 
     #MPO update after a two-qudit gate        
     def MPOtwoqubitUpdateDevice(self, l, r, seed):
+
+        print('At beginning of mode ', l, ', memory use is ', mempool.used_bytes())
+        for obj in gc.get_objects():
+            try:
+                if type(obj) is cp._core.core.ndarray:
+                    print(type(obj), obj.shape)
+            except:
+                pass
+        mempool.free_all_blocks()
 
         chi = self.chi
         # if r == 0:
