@@ -1,17 +1,31 @@
 '''Full simulation code containing the Device method (cupy, unified update)'''
+from ast import Lambda
 import numpy as np
 import cupy as cp
-
 from scipy.stats import rv_continuous
 from qutip import squeeze, thermal_dm
-
-import time
 
 from mpo_sort import Aligner
 from cuda_kernels import Rand_U, update_MPO
 
-np.random.seed(1)
-np.set_printoptions(precision=3)
+import time
+import argparse
+import os
+
+mempool = cp.get_default_memory_pool()
+# mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--id', type=int, help="ID of the file to generate corresponding to task number")
+parser.add_argument('--n', type=int, help='Number of modes.')
+parser.add_argument('--m', type=int, help='Number of squeezed states. One state per mode from the left.')
+parser.add_argument('--loss', type=float, help='Photon loss rate.')
+# parser.add_argument('--chi', type=int, help='Maximum allowed bond dimension')
+parser.add_argument('--r', type=float, help='Squeezing parameter.')
+args = vars(parser.parse_args())
+
+# np.random.seed(1)
+# np.set_printoptions(precision=3)
 
 s = cp.cuda.Stream()
 s1 = cp.cuda.Stream(non_blocking=True)
@@ -54,13 +68,12 @@ class MPO:
 
     def MPOInitialization(self):
         
-        chi = self.init_chi; d = self.d; K = self.K
+        chi = self.chi; init_chi = self.init_chi; d = self.d; K = self.K
 
         self.Lambda_edge = np.ones(chi, dtype = 'float32') # edge lambda (for first and last site) don't exists and are ones
-        self.Lambda = np.zeros([chi, self.n - 1], dtype = 'float32')
-        self.Gamma = cp.zeros([chi, chi, self.n], dtype = 'complex64')
-        self.Gamma_temp = np.zeros([chi, chi, self.n], dtype = 'complex64')        
-        self.charge = d * np.ones([chi, self.n + 1, 2], dtype = 'int32')
+        self.Lambda = np.zeros([init_chi, self.n - 1], dtype = 'float32')
+        self.Gamma = np.zeros([init_chi, init_chi, self.n], dtype = 'complex64')  
+        self.charge = d * np.ones([init_chi, self.n + 1, 2], dtype = 'int32')
         self.charge[0] = 0
         
         am = (1 - self.loss) * np.exp(- 2 * self.r) + self.loss
@@ -104,7 +117,7 @@ class MPO:
                         #self.Gamma_temp[j, chi_, i] = sq[ch_diff1, ch_diff2]
                         #self.charge[chi_, i + 1, 0] = c1 - ch_diff1
                         #self.charge[chi_, i + 1, 1] = c2 - ch_diff2
-                        self.Gamma_temp[j, (c1 - ch_diff1) * d + c2 - ch_diff2, i] = sq[ch_diff1, ch_diff2]
+                        self.Gamma[j, (c1 - ch_diff1) * d + c2 - ch_diff2, i] = sq[ch_diff1, ch_diff2]
                         self.charge[(c1 - ch_diff1) * d + c2 - ch_diff2, i + 1, 0] = c1 - ch_diff1
                         self.charge[(c1 - ch_diff1) * d + c2 - ch_diff2, i + 1, 1] = c2 - ch_diff2
                         bonds_updated[(c1 - ch_diff1) * d + c2 - ch_diff2] = 1
@@ -126,7 +139,7 @@ class MPO:
                 c1 = 0
             else:
                 c1 = self.charge[j, K - 1, 1]
-            self.Gamma_temp[j, 0, K - 1] = sq[c0, c1]
+            self.Gamma[j, 0, K - 1] = sq[c0, c1]
         
         for i in range(self.m - 1, self.n - 1):
             self.Lambda[0, i] = 1
@@ -135,7 +148,7 @@ class MPO:
         
         print('Update gamma from gamme_temp')
         for i in range(self.m):
-            self.Gamma[:, :, i] = cp.multiply(cp.array(self.Gamma_temp[:, :, i]), cp.array(self.Lambda[:, i].reshape(1, -1)))
+            self.Gamma[:, :, i] = np.multiply(self.Gamma[:, :, i], self.Lambda[:, i].reshape(1, -1))
 
         print('Update the rest of gamma values to 1')
         for i in range(self.m, self.n):
@@ -160,15 +173,25 @@ class MPO:
                     self.Lambda[i - 1] = self.Lambda[i - 1, idx]
             if i < n:
                 self.Gamma[i] = self.Gamma[i, idx]
-        
+
+        print('Total probability normalization factor: ', self.TotalProbFromMPO())
+
+        charge_temp = np.copy(self.charge)
+        Lambda_temp = np.copy(self.Lambda)
+        Gamma_temp = np.copy(self.Gamma)
+        self.charge = d * np.ones([self.n + 1, chi, 2], dtype = 'int32')
+        self.Lambda = np.zeros([self.n - 1, chi], dtype = 'float32')
+        self.Gamma = np.zeros([self.n, chi, chi], dtype = 'complex64')
+
+        self.Gamma[:, :init_chi, :init_chi] = Gamma_temp
+        self.Lambda[:, :init_chi] = Lambda_temp
+        self.charge[:, :init_chi] = charge_temp
+
         print('Canonicalization update')
         for l in range(self.n - 1):
             self.MPOtwoqubitUpdate(l, 0)
 
-        self.Gamma = self.Gamma[:, :self.chi, :self.chi]
-        self.Gamma = cp.asnumpy(self.Gamma)
-        self.Lambda = self.Lambda[:, :self.chi]
-        self.charge = self.charge[:, :self.chi]
+        
 
     # Gives the range of left, center and right hand side charge values when center charge is fixed to tau
     def charge_range(self, location, tau):
@@ -196,8 +219,8 @@ class MPO:
     def MPOtwoqubitUpdateDevice(self, l, r, seed):
 
         chi = self.chi
-        if r == 0:
-            chi = self.init_chi
+        # if r == 0:
+            # chi = self.init_chi
         
         # Initializing unitary matrix on GPU
         np.random.seed(seed)
@@ -249,6 +272,7 @@ class MPO:
         LR_obj, Glc_obj, Gcr_obj = map(aligner.make_data_obj, ['LR','Glc','Gcr'], [True]*3, [LR, Glc, Gcr], [ [0],[0,0],[0,0] ])
         d_LR_obj, d_Glc_obj, d_Gcr_obj = map(aligner.to_cupy, [LR_obj, Glc_obj, Gcr_obj])
         d_LR_obj, d_Glc_obj, d_Gcr_obj = map(aligner.align_data, [d_LR_obj, d_Glc_obj, d_Gcr_obj])
+        print(d_Glc_obj.data.shape, d_Gcr_obj.data.shape)
        
         self.align_time += time.time() - start
 
@@ -293,6 +317,7 @@ class MPO:
                 # Skip if any selection must be empty
                 if d_cl_obj.data.shape[0] * d_cr_obj.data.shape[0] * d_cl_obj.data.shape[1] * d_cr_obj.data.shape[1] == 0:
                     tau_array.append(0)
+                    del d_cl_obj.data, d_cr_obj.data, d_lr_obj.data, d_glc_obj.data, d_gcr_obj.data
                     continue
 
                 
@@ -322,21 +347,19 @@ class MPO:
                 self.svd_time += time.time() - start
 
                 with s1:
-                    d_V, d_W = map(cp.asnumpy, [d_V, d_W])
+                    #d_V, d_W = map(cp.asnumpy, [d_V, d_W])
                     # Store new results
-                    if r == 0:
-                        new_Gamma_L = new_Gamma_L + [d_V[:, i] for i in range(len(Lambda))]
-                        new_Gamma_R = new_Gamma_R + [d_W[i, :] for i in range(len(Lambda))]
-                    else:
-                        new_Gamma_L = new_Gamma_L + [d_V[:, i] for i in range(len(Lambda))]
-                        new_Gamma_R = new_Gamma_R + [d_W[i, :] for i in range(len(Lambda))]
+                    new_Gamma_L = new_Gamma_L + [d_V[:, i] for i in range(len(Lambda))]
+                    new_Gamma_R = new_Gamma_R + [d_W[i, :] for i in range(len(Lambda))]
                 
                 new_Lambda = np.append(new_Lambda, Lambda)
                 new_charge_0 = np.append(new_charge_0, np.repeat(np.array(charge_c_0, dtype=int_type), len(Lambda)))
                 new_charge_1 = np.append(new_charge_1, np.repeat(np.array(charge_c_1, dtype=int_type), len(Lambda)))
                 tau_array.append(len(Lambda))
+
+                # del d_cl_obj.data, d_cr_obj.data, d_lr_obj.data, d_glc_obj.data, d_gcr_obj.data, d_C_obj.data, d_T_obj.data
         
-        
+        # del d_cNewL_obj.data, d_cNewR_obj.data, d_LR_obj.data, d_Glc_obj.data, d_Gcr_obj.data
 
         # Number of singular values to save
         num_lambda = int(min(new_Lambda.shape[0], self.chi))
@@ -369,6 +392,7 @@ class MPO:
                 # Finding bond indices (tau_idx) that are in the largest num_lambda singular values and for center charge tau.
                 # idx_select[indices] = tau_idx
                 tau_idx, indices, _ = np.intersect1d(idx_select, np.arange(cum_tau_array[tau], cum_tau_array[tau + 1]), return_indices = True)
+                tau += 1 # This line MUST be before the continue statement
 
                 if len(tau_idx) * idx_gamma0_0.shape[0] * idx_gamma0_1.shape[0] * idx_gamma1_0.shape[0] * idx_gamma1_1.shape[0] == 0:
                     continue
@@ -388,7 +412,7 @@ class MPO:
                 d_Gamma0Out.data[idx_gamma0_0.reshape(-1,1), idx_gamma0_1[indices].reshape(1,-1)] = d_V
                 # Right
                 d_Gamma1Out.data[idx_gamma1_0[indices].reshape(-1,1), idx_gamma1_1.reshape(1,-1)] = d_W
-                tau += 1
+                
                 cp.cuda.stream.get_current_stream().synchronize()
                 self.segment3_time += time.time() - start
                 #print(time.time())
@@ -425,20 +449,18 @@ class MPO:
         d_Gamma0Out.data[:, :num_lambda] = d_Gamma0Out.data[:, idx_sort]
         d_Gamma1Out.data[:num_lambda] = d_Gamma1Out.data[idx_sort]
 
-        if r == 0:
-            if location == right:
-                self.Gamma[self.n - 2, :, :min(chi, self.d ** 2)] = d_Gamma0Out.data[:, :min(chi, self.d ** 2)]
-                self.Gamma[self.n - 1, :min(chi, self.d ** 2), 0] = d_Gamma1Out.data[:min(chi, self.d ** 2), 0]
-            else:
-                self.Gamma[l, :, :] = d_Gamma0Out.data
-                self.Gamma[l + 1, :, :] = d_Gamma1Out.data
+        if location == right:
+            self.Gamma[self.n - 2, :, :min(chi, self.d ** 2)] = cp.asnumpy(d_Gamma0Out.data[:, :min(chi, self.d ** 2)])
+            self.Gamma[self.n - 1, :min(chi, self.d ** 2), 0] = cp.asnumpy(d_Gamma1Out.data[:min(chi, self.d ** 2), 0])
         else:
-            if location == right:
-                self.Gamma[self.n - 2, :, :min(chi, self.d ** 2)] = cp.asnumpy(d_Gamma0Out.data[:, :min(chi, self.d ** 2)])
-                self.Gamma[self.n - 1, :min(chi, self.d ** 2), 0] = cp.asnumpy(d_Gamma1Out.data[:min(chi, self.d ** 2), 0])
-            else:
-                self.Gamma[l, :, :] = cp.asnumpy(d_Gamma0Out.data)
-                self.Gamma[l + 1, :, :] = cp.asnumpy(d_Gamma1Out.data)
+            self.Gamma[l, :, :] = cp.asnumpy(d_Gamma0Out.data)
+            self.Gamma[l + 1, :, :] = cp.asnumpy(d_Gamma1Out.data)
+
+        # del d_Gamma0Out.data, d_Gamma1Out.data
+        # for i in range(len(new_Gamma_L)-1, -1, -1):
+        #     del new_Gamma_L[i]
+        # for i in range(len(new_Gamma_R)-1, -1, -1):
+        #     del new_Gamma_R[i]
 
 
     def RCS1DOneCycleUpdate(self, k):
@@ -510,6 +532,7 @@ class MPO:
         for ch in range(self.d):
             idx = np.append(idx, np.intersect1d(np.nonzero(self.charge[1, :, 0] == ch), np.intersect1d(np.nonzero(self.charge[1, :, 1] == ch), np.nonzero(self.Lambda[0, :] > 0))))
         res = np.matmul(self.Gamma[0, :, idx].T, RTemp[idx].reshape(-1))
+        print('Probability: ', np.sum(res))
         return np.sum(res)
     
     def MPOEntanglementEntropy(self):      
@@ -564,7 +587,7 @@ def RenyiFromColumn(InputColumn, alpha):
 def ColumnSumToOne(InputColumn):
     return InputColumn / np.sum(InputColumn)
 
-def RCS1DMultiCycleAvg(NumSample, n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
+def RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
     TotalProbAvg = np.zeros([n])
     EEAvg = np.zeros([n - 1, n])
     REAvg = np.zeros([n - 1, n, 5])
@@ -573,25 +596,56 @@ def RCS1DMultiCycleAvg(NumSample, n, m, d, r, loss, init_chi, chi, errtol = 10 *
     EETot = np.zeros([n - 1, n])
     RETot = np.zeros([n - 1, n, 5])
 
-    for i in range(NumSample):
-        print("Sample number", i)
-        boson = MPO(n, m, d, r, loss, init_chi, chi, errtol, PS)
-        Totprob, EE, RE = boson.RCS1DMultiCycle()
-        TotalProbTot += Totprob;#TotalProbPar[:,i];
-        EETot += EE;#EEPar[:,:,i];
-        RETot += RE;#EEPar[:,:,i];
+    boson = MPO(n, m, d, r, loss, init_chi, chi, errtol, PS)
+    Totprob, EE, RE = boson.RCS1DMultiCycle()
+    TotalProbTot += Totprob;#TotalProbPar[:,i];
+    EETot += EE;#EEPar[:,:,i];
+    RETot += RE;#EEPar[:,:,i];
     
-    TotalProbAvg = TotalProbTot / NumSample
-    EEAvg = EETot / NumSample
-    REAvg = RETot / NumSample
+    TotalProbAvg = TotalProbTot
+    EEAvg = EETot
+    REAvg = RETot
 
     return TotalProbAvg,  EEAvg, REAvg
 
+def PS_dist(n, r, loss):
+    am = (1 - loss) * np.exp(- 2 * r) + loss
+    ap = (1 - loss) * np.exp(2 * r) + loss
+    s = 1 / 4 * np.log(ap / am)
+    n_th = 1 / 2 * (np.sqrt(am * ap) - 1)
+    nn = 40
+    single_dist = np.array(np.diag(squeeze(nn, s) * thermal_dm(nn, n_th) * squeeze(nn, s).dag()), dtype = float)
+    prob_dist = np.array(np.diag(squeeze(nn, s) * thermal_dm(nn, n_th) * squeeze(nn, s).dag()), dtype = float)
+    for i in range(n - 1):
+        prob_dist = np.convolve(prob_dist, single_dist)
+    return prob_dist
+
 if __name__ == "__main__":
-    t0 = time.time() 
-    NumSample = 1; n = 10; m = 4; loss = 0.5; init_chi = 2000; chi = 2000; r = 0.2; d = 5; errtol = 10 ** (-7)
-    PS = 4
-    Totprob, EE, RE = RCS1DMultiCycleAvg(NumSample, n, m, d, r, loss, init_chi, chi, errtol, PS)
-    print(Totprob)
-    print(EE)
-    print("Time cost", time.time() - t0)
+    
+    id = args['id']
+    n = args['n']
+    m = args['m']
+    loss = args['loss']
+    # chi = args['chi']
+    r = args['r']
+
+    t0 = time.time()
+
+    errtol = 10 ** (-10)
+    PS = m; d = PS + 1; chi = 8 * 2**10; init_chi = d**2
+    
+    begin_dir = './results/n_{}_m_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, loss, chi, r, PS)
+    if not os.path.isdir(begin_dir):
+        os.makedirs(begin_dir)
+
+    if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
+        Totprob, EE, RE = RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol, PS)
+        print(Totprob)
+        print(EE)
+        
+        np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
+        np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
+
+        print("Time cost", time.time() - t0)
+    else:
+        print("Simulation already ran.")
