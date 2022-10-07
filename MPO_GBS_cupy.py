@@ -13,7 +13,7 @@ import os
 import gc
 
 mempool = cp.get_default_memory_pool()
-mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
+# mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--id', type=int, help="ID of the file to generate corresponding to task number")
@@ -544,10 +544,10 @@ class MPO:
             idx = np.append(idx, np.intersect1d(np.nonzero(self.charge[1, :, 0] == ch), np.intersect1d(np.nonzero(self.charge[1, :, 1] == ch), np.nonzero(self.Lambda[0, :] > 0))))
         res = np.matmul(self.Gamma[0, :, idx].T, RTemp[idx].reshape(-1))
         tot_prob = np.sum(res)
-        print('Probability: ', tot_prob)
-        if self.normalization != None:
-            if tot_prob/self.normalization > 1.05 or tot_prob/self.normalization < 0.95:
-                quit()
+        print('Probability: ', np.real(tot_prob))
+        # if self.normalization != None:
+        #     if tot_prob/self.normalization > 1.05 or tot_prob/self.normalization < 0.95:
+        #         quit()
         return tot_prob
     
     def MPOEntanglementEntropy(self):      
@@ -646,7 +646,7 @@ if __name__ == "__main__":
 
     t0 = time.time()
 
-    errtol = 10 ** (-10)
+    errtol = 10 ** (-7)
     # PS = m; d = PS + 1; chi = 8 * 2**m; init_chi = d**2
     prob_dist = PS_dist(m, r, loss)
     cum_prob = 0
@@ -656,21 +656,45 @@ if __name__ == "__main__":
         i += 1
 
         
-    PS = None; d = i; chi = 32 * 2**m; init_chi = d**2
-    print('d is ', d)
+    # PS = None; d = i; chi = 128 * 2**m; init_chi = d**2
+    # print('d is ', d)
     
-    begin_dir = './results/n_{}_m_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, loss, chi, r, PS)
-    if not os.path.isdir(begin_dir):
-        os.makedirs(begin_dir)
+    # begin_dir = './results/n_{}_m_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, loss, chi, r, PS)
+    # if not os.path.isdir(begin_dir):
+    #     os.makedirs(begin_dir)
 
-    if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
-        Totprob, EE, RE = RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol, PS)
-        print(Totprob)
-        print(EE)
+    # if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
+    #     Totprob, EE, RE = RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol, PS)
+    #     print(Totprob)
+    #     print(EE)
         
-        np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
-        np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
+    #     np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
+    #     np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
 
-        print("Time cost", time.time() - t0)
-    else:
-        print("Simulation already ran.")
+    #     print("Time cost", time.time() - t0)
+    # else:
+    #     print("Simulation already ran.")
+
+    
+    max_d = i
+        
+    for PS in range(max_d):
+        errtol = 10 ** (-7) / prob_dist[PS]
+        d = PS + 1; chi = int(prob_dist[PS] * 64 * 2**PS); init_chi = d**2
+        print('d is ', d, ', errtol is ', errtol, ', chi is ', chi)
+        
+        begin_dir = './results/n_{}_m_{}_loss_{}_r_{}/chi_{}_PS_{}'.format(n, m, loss, r, chi, PS)
+        if not os.path.isdir(begin_dir):
+            os.makedirs(begin_dir)
+
+        if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
+            Totprob, EE, RE = RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol, PS)
+            print(Totprob)
+            # print(EE)
+            
+            np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
+            np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
+
+            print("Time cost", time.time() - t0)
+        else:
+            print("Simulation already ran.")
