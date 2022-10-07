@@ -1,5 +1,4 @@
 '''Full simulation code containing the Device method (cupy, unified update)'''
-from ast import Lambda
 import numpy as np
 import cupy as cp
 from scipy.stats import rv_continuous
@@ -14,7 +13,7 @@ import os
 import gc
 
 mempool = cp.get_default_memory_pool()
-# mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
+mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--id', type=int, help="ID of the file to generate corresponding to task number")
@@ -51,6 +50,7 @@ class MPO:
         self.EEPar = np.zeros([n - 1, n], dtype = 'float32')      
         self.REPar = np.zeros([n - 1, n, 5], dtype = 'float32')
         self.PS = PS
+        self.normalization = None
         self.update_time = 0
         self.U_time = 0
         self.svd_time = 0
@@ -175,7 +175,8 @@ class MPO:
             if i < n:
                 self.Gamma[i] = self.Gamma[i, idx]
 
-        print('Total probability normalization factor: ', self.TotalProbFromMPO())
+        self.normalization = self.TotalProbFromMPO()
+        print('Total probability normalization factor: ', self.normalization)
 
         charge_temp = np.copy(self.charge)
         Lambda_temp = np.copy(self.Lambda)
@@ -219,14 +220,14 @@ class MPO:
     #MPO update after a two-qudit gate        
     def MPOtwoqubitUpdateDevice(self, l, r, seed):
 
-        print('At beginning of mode ', l, ', memory use is ', mempool.used_bytes())
-        for obj in gc.get_objects():
-            try:
-                if type(obj) is cp._core.core.ndarray:
-                    print(type(obj), obj.shape)
-            except:
-                pass
-        mempool.free_all_blocks()
+        # print('At beginning of mode ', l, ', memory use is ', mempool.used_bytes())
+        # for obj in gc.get_objects():
+        #     try:
+        #         if type(obj) is cp._core.core.ndarray:
+        #             print(type(obj), obj.shape)
+        #     except:
+        #         pass
+        # mempool.free_all_blocks()
 
         chi = self.chi
         # if r == 0:
@@ -282,7 +283,7 @@ class MPO:
         LR_obj, Glc_obj, Gcr_obj = map(aligner.make_data_obj, ['LR','Glc','Gcr'], [True]*3, [LR, Glc, Gcr], [ [0],[0,0],[0,0] ])
         d_LR_obj, d_Glc_obj, d_Gcr_obj = map(aligner.to_cupy, [LR_obj, Glc_obj, Gcr_obj])
         d_LR_obj, d_Glc_obj, d_Gcr_obj = map(aligner.align_data, [d_LR_obj, d_Glc_obj, d_Gcr_obj])
-        print(d_Glc_obj.data.shape, d_Gcr_obj.data.shape)
+        # print(d_Glc_obj.data.shape, d_Gcr_obj.data.shape)
        
         self.align_time += time.time() - start
 
@@ -348,11 +349,11 @@ class MPO:
                 # SVD
                 start = time.time()
                 d_V, d_Lambda, d_W = cp.linalg.svd(d_T, full_matrices = False)
-                # d_V = cp.asarray(d_V)
-                # d_Lambda = cp.asarray(d_Lambda)
                 d_W = cp.matmul(cp.conj(d_V.T), d_C)
-                #Lambda = d_Lambda
                 Lambda = cp.asnumpy(d_Lambda)
+                # d_V, d_Lambda, d_W = np.linalg.svd(cp.asnumpy(d_T), full_matrices = False)
+                # d_W = np.matmul(np.conj(d_V.T), cp.asnumpy(d_C))
+                # Lambda = d_Lambda
                 s.synchronize()
                 self.svd_time += time.time() - start
 
@@ -542,8 +543,12 @@ class MPO:
         for ch in range(self.d):
             idx = np.append(idx, np.intersect1d(np.nonzero(self.charge[1, :, 0] == ch), np.intersect1d(np.nonzero(self.charge[1, :, 1] == ch), np.nonzero(self.Lambda[0, :] > 0))))
         res = np.matmul(self.Gamma[0, :, idx].T, RTemp[idx].reshape(-1))
-        print('Probability: ', np.sum(res))
-        return np.sum(res)
+        tot_prob = np.sum(res)
+        print('Probability: ', tot_prob)
+        if self.normalization != None:
+            if tot_prob/self.normalization > 1.05 or tot_prob/self.normalization < 0.95:
+                quit()
+        return tot_prob
     
     def MPOEntanglementEntropy(self):      
         Output = np.zeros([self.n - 1])
@@ -642,7 +647,17 @@ if __name__ == "__main__":
     t0 = time.time()
 
     errtol = 10 ** (-10)
-    PS = m; d = PS + 1; chi = 8 * 2**10; init_chi = d**2
+    # PS = m; d = PS + 1; chi = 8 * 2**m; init_chi = d**2
+    prob_dist = PS_dist(m, r, loss)
+    cum_prob = 0
+    i = 0
+    while cum_prob < 0.99:
+        cum_prob += prob_dist[i]
+        i += 1
+
+        
+    PS = None; d = i; chi = 32 * 2**m; init_chi = d**2
+    print('d is ', d)
     
     begin_dir = './results/n_{}_m_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, loss, chi, r, PS)
     if not os.path.isdir(begin_dir):
