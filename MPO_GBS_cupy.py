@@ -12,10 +12,8 @@ import argparse
 import os
 import gc
 
-mempool = cp.get_default_memory_pool()
-# mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
-
 parser = argparse.ArgumentParser()
+parser.add_argument('--gpu', type=int, help="Which GPU", default=0)
 parser.add_argument('--id', type=int, help="ID of the file to generate corresponding to task number")
 parser.add_argument('--n', type=int, help='Number of modes.')
 parser.add_argument('--m', type=int, help='Number of squeezed states. One state per mode from the left.')
@@ -24,11 +22,10 @@ parser.add_argument('--loss', type=float, help='Photon loss rate.')
 parser.add_argument('--r', type=float, help='Squeezing parameter.')
 args = vars(parser.parse_args())
 
+# mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
+
 # np.random.seed(1)
 # np.set_printoptions(precision=3)
-
-s = cp.cuda.Stream()
-s1 = cp.cuda.Stream(non_blocking=True)
 
 data_type = np.complex64
 float_type = np.float32
@@ -238,7 +235,6 @@ class MPO:
         start = time.time()
         d_U_r, d_U_i = Rand_U(self.d, r)
         #print(U_r[0,0,0])
-        s.synchronize()
         self.U_time += time.time() - start
 
 
@@ -341,7 +337,7 @@ class MPO:
                 d_C = aligner.compact_data(d_C_obj)
                 d_T = aligner.compact_data(d_T_obj)
                 # print('T: ', d_T)
-                s.synchronize()
+                
                 dt = time.time() - start
                 self.largest_T = max(dt, self.largest_T)
                 self.theta_time += dt
@@ -354,14 +350,13 @@ class MPO:
                 # d_V, d_Lambda, d_W = np.linalg.svd(cp.asnumpy(d_T), full_matrices = False)
                 # d_W = np.matmul(np.conj(d_V.T), cp.asnumpy(d_C))
                 # Lambda = d_Lambda
-                s.synchronize()
+                
                 self.svd_time += time.time() - start
 
-                with s1:
-                    #d_V, d_W = map(cp.asnumpy, [d_V, d_W])
-                    # Store new results
-                    new_Gamma_L = new_Gamma_L + [d_V[:, i] for i in range(len(Lambda))]
-                    new_Gamma_R = new_Gamma_R + [d_W[i, :] for i in range(len(Lambda))]
+                #d_V, d_W = map(cp.asnumpy, [d_V, d_W])
+                # Store new results
+                new_Gamma_L = new_Gamma_L + [d_V[:, i] for i in range(len(Lambda))]
+                new_Gamma_R = new_Gamma_R + [d_W[i, :] for i in range(len(Lambda))]
                 
                 new_Lambda = np.append(new_Lambda, Lambda)
                 new_charge_0 = np.append(new_charge_0, np.repeat(np.array(charge_c_0, dtype=int_type), len(Lambda)))
@@ -637,12 +632,15 @@ def PS_dist(n, r, loss):
 
 if __name__ == "__main__":
     
+    gpu = args['gpu']
     id = args['id']
     n = args['n']
     m = args['m']
     loss = args['loss']
     # chi = args['chi']
     r = args['r']
+
+    cp.cuda.Device(gpu).use()
 
     t0 = time.time()
 
