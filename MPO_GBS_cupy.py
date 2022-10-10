@@ -654,45 +654,45 @@ if __name__ == "__main__":
         i += 1
 
         
-    # PS = None; d = i; chi = 128 * 2**m; init_chi = d**2
-    # print('d is ', d)
+    PS = None; d = i; chi = 128 * 4**m; init_chi = d**2
+    print('d is ', d)
     
-    # begin_dir = './results/n_{}_m_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, loss, chi, r, PS)
-    # if not os.path.isdir(begin_dir):
-    #     os.makedirs(begin_dir)
+    begin_dir = './results/n_{}_m_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, loss, chi, r, PS)
+    if not os.path.isdir(begin_dir):
+        os.makedirs(begin_dir)
 
-    # if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
-    #     Totprob, EE, RE = RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol, PS)
-    #     print(Totprob)
-    #     print(EE)
+    if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
+        Totprob, EE, RE = RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol, PS)
+        print(Totprob)
+        print(EE)
         
-    #     np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
-    #     np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
+        np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
+        np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
 
-    #     print("Time cost", time.time() - t0)
-    # else:
-    #     print("Simulation already ran.")
+        print("Time cost", time.time() - t0)
+    else:
+        print("Simulation already ran.")
 
     
-    max_d = i
+    # max_d = i
         
-    for PS in range(max_d):
-        errtol = 10 ** (-7) / prob_dist[PS]
-        d = PS + 1; chi = int(prob_dist[PS] * 64 * 2**PS); init_chi = d**2
-        print('d is ', d, ', errtol is ', errtol, ', chi is ', chi)
+    # for PS in range(max_d):
+    #     errtol = 10 ** (-7) / prob_dist[PS]
+    #     d = PS + 1; chi = int(prob_dist[PS] * 64 * 2**PS); init_chi = d**2
+    #     print('d is ', d, ', errtol is ', errtol, ', chi is ', chi)
         
-        begin_dir = './results/n_{}_m_{}_loss_{}_r_{}/chi_{}_PS_{}'.format(n, m, loss, r, chi, PS)
-        if not os.path.isdir(begin_dir):
-            os.makedirs(begin_dir)
+    #     begin_dir = './results/n_{}_m_{}_loss_{}_r_{}/chi_{}_PS_{}'.format(n, m, loss, r, chi, PS)
+    #     if not os.path.isdir(begin_dir):
+    #         os.makedirs(begin_dir)
 
-        if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
-            Totprob, EE, RE = RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol, PS)
-            print(Totprob)
-            # print(EE)
+    #     if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
+    #         Totprob, EE, RE = RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol, PS)
+    #         print(Totprob)
+    #         # print(EE)
             
-            np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
-            np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
+    #         np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
+    #         np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
 
-            print("Time cost", time.time() - t0)
-        else:
-            print("Simulation already ran.")
+    #         print("Time cost", time.time() - t0)
+    #     else:
+    #         print("Simulation already ran.")
