@@ -16,11 +16,16 @@ if rank != 0:
 
 
 
+data_type = np.complex64
+float_type = np.float32
+int_type = np.int32
+
+
+
 class SlaveMPO:
 
-    def __init__(self, d, init_chi, chi, errtol = 10 ** (-6)):
+    def __init__(self, d, chi):
         self.d = d
-        self.init_chi = init_chi
         self.chi = chi
         self.update_time = 0
         self.U_time = 0
@@ -32,6 +37,11 @@ class SlaveMPO:
         self.copy_time = 0
         self.align_time = 0
         self.before_loop_other_time = 0
+        self.segment1_time = 0
+        self.segment2_time = 0
+        self.segment3_time = 0
+        self.largest_C = 0
+        self.largest_T = 0
 
 
     # Gives the range of left, center and right hand side charge values when center charge is fixed to tau
@@ -52,29 +62,53 @@ class SlaveMPO:
         return min_charge_l, max_charge_l, min_charge_c, max_charge_c, min_charge_r, max_charge_r
         
 
+    def Slaveloop(self):
+
+        status = None
+        while status != 'Finished':
+            status = comm.recv(source=0, tag=100)
+            print('rank: {}, status: {}'.format(rank, status))
+            self.SlaveProcess()
+
+
     def SlaveProcess(self):
 
         LC = np.empty(self.chi, dtype = 'float32')
         LR = np.empty(self.chi, dtype = 'float32')
-        CL = np.empty([self.init_chi, 2], dtype = 'int32')
-        CC = np.empty([self.init_chi, 2], dtype = 'int32')
-        CR = np.empty([self.init_chi, 2], dtype = 'int32')
-        Glc = np.empty([self.init_chi, self.init_chi], dtype = 'complex64')  
-        Gcr = np.empty([self.init_chi, self.init_chi], dtype = 'complex64')
-        r = 0.0001
-        location = 'string'
-        seed = 9999
+        CL = np.empty([self.chi, 2], dtype = 'int32')
+        CC = np.empty([self.chi, 2], dtype = 'int32')
+        CR = np.empty([self.chi, 2], dtype = 'int32')
+        Glc = np.empty([self.chi, self.chi], dtype = 'complex64')  
+        Gcr = np.empty([self.chi, self.chi], dtype = 'complex64')
         
-        comm.Recv(LC, source=0, tag=0)
-        comm.Recv(LR, source=0, tag=1)
-        comm.Recv(CL, source=0, tag=2)
-        comm.Recv(CC, source=0, tag=3)
-        comm.Recv(CR, source=0, tag=4)
-        comm.Recv(Glc, source=0, tag=5)
-        comm.Recv(Gcr, source=0, tag=6)
-        comm.Recv(r, source=0, tag=7)
-        comm.Recv(location, source=0, tag=8)
-        comm.Recv(seed, source=0, tag=9)
+        comm.Recv([LC, MPI.FLOAT], source=0, tag=0)
+        comm.Recv([LR, MPI.FLOAT], source=0, tag=1)
+        comm.Recv([CL, MPI.INT], source=0, tag=2)
+        comm.Recv([CC, MPI.INT], source=0, tag=3)
+        comm.Recv([CR, MPI.INT], source=0, tag=4)
+        comm.Recv([Glc, MPI.C_FLOAT_COMPLEX], source=0, tag=5)
+        comm.Recv([Gcr, MPI.C_FLOAT_COMPLEX], source=0, tag=6)
+        r = comm.recv(source=0, tag=7)
+        location = comm.recv(source=0, tag=8)
+        seed = comm.recv(source=0, tag=9)
+        print('rank: {} got data'.format(rank))#, LC, LR, CL, CC, CR, Glc, Gcr, r, location, seed)
+
+        # print('waiting')
+        # LR = comm.recv(source=0, tag=1)
+        # print(LR)
+        # CL = comm.recv(source=0, tag=2)
+        # print(CL)
+        # CC = comm.recv(source=0, tag=3)
+        # print(CC)
+        # CR = comm.recv(source=0, tag=4)
+        # print(CR)
+        # Glc = comm.recv(source=0, tag=5)
+        # print(Glc)
+        # Gcr = comm.recv(source=0, tag=6)
+        # r = comm.recv(source=0, tag=7)
+        # location = comm.recv(source=0, tag=8)
+        # seed = comm.recv(source=0, tag=9)
+
 
         # Initializing unitary matrix on GPU
         np.random.seed(seed)
@@ -195,8 +229,8 @@ class SlaveMPO:
             idx_select = np.array([], dtype=int_type)
         
         # Initialize selected and sorted Gamma outputs
-        d_Gamma0Out = Aligner.make_data_obj('Glc', False, cp.zeros([chi, chi], dtype = data_type), [0, 0])
-        d_Gamma1Out = Aligner.make_data_obj('Gcr', False, cp.zeros([chi, chi], dtype = data_type), [0, 0])
+        d_Gamma0Out = Aligner.make_data_obj('Glc', False, cp.zeros([self.chi, self.chi], dtype = data_type), [0, 0])
+        d_Gamma1Out = Aligner.make_data_obj('Gcr', False, cp.zeros([self.chi, self.chi], dtype = data_type), [0, 0])
 
         # Indices of eigenvalues that mark the beginning of center charge tau
         cum_tau_array = np.cumsum(tau_array)
@@ -271,7 +305,11 @@ class SlaveMPO:
         Gamma0Out = cp.asnumpy(d_Gamma0Out.data)
         Gamma1Out = cp.asnumpy(d_Gamma1Out.data)
 
-        comm.send(new_charge, 0, tag=0)
-        comm.send(new_Lambda, 0, tag=1)
-        comm.send(Gamma0Out, 0, tag=2)
-        comm.send(Gamma1Out, 0, tag=3)
+        print('Rank {} finished processing'.format(rank))
+
+        comm.Send(new_charge, 0, tag=10)
+        comm.Send(new_Lambda, 0, tag=11)
+        comm.Send(Gamma0Out, 0, tag=12)
+        comm.Send(Gamma1Out, 0, tag=13)
+
+        print('Rank {} sent data'.format(rank))
