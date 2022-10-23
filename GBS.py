@@ -11,13 +11,13 @@ from qutip import squeeze, thermal_dm
 from Master_GBS_MPO import MasterMPO
 from Slave_GBS_MPO import SlaveMPO
 
-num_gpus = 4
+num_gpus = 1
 from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
-if rank != 0:
-    cp.cuda.Device((rank-1)%num_gpus).use()
+# if rank != 0:
+#     cp.cuda.Device((rank-1)%num_gpus).use()
 
 def MasterMultiCycle(n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
     TotalProbAvg = np.zeros([n+1])
@@ -44,6 +44,7 @@ def MasterMultiCycle(n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = 
 def SlaveMultiCycle(d, chi):
     boson = SlaveMPO(d, chi)
     boson.Slaveloop()
+    print('Slave loop finished')
 
 
 def PS_dist(n, r, loss):
@@ -77,8 +78,8 @@ def PS_dist(n, r, loss):
 # # chi = args['chi']
 # r = args['r']
 
-n = 20
-m = 3
+n = 6
+m = 2
 
 t0 = time.time()
 
@@ -95,7 +96,7 @@ errtol = 10 ** (-7)
 
 for i in range(3):
     for beta in [0.6, 0.8, 1.0, 1.2]:
-        for r in [0.48, 0.662, 0.88, 1.146, 1.44]:
+        for r in [1.146, 1.44]:
             ideal_ave_photons = m#*sinh(r)**2
             lossy_ave_photons = beta*sqrt(ideal_ave_photons)
             loss = round(100*(1 - lossy_ave_photons/ideal_ave_photons))/100

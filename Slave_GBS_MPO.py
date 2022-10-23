@@ -11,8 +11,8 @@ from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
-if rank != 0:
-    cp.cuda.Device((rank-1)%num_gpus).use()
+# if rank != 0:
+#     cp.cuda.Device((rank-1)%num_gpus).use()
 
 
 
@@ -66,9 +66,9 @@ class SlaveMPO:
 
         status = None
         while status != 'Finished':
-            status = comm.recv(source=0, tag=100)
             print('rank: {}, status: {}'.format(rank, status))
             self.SlaveProcess()
+            status = comm.recv(source=0, tag=100)
 
 
     def SlaveProcess(self):
@@ -91,7 +91,7 @@ class SlaveMPO:
         r = comm.recv(source=0, tag=7)
         location = comm.recv(source=0, tag=8)
         seed = comm.recv(source=0, tag=9)
-        print('rank: {} got data'.format(rank))#, LC, LR, CL, CC, CR, Glc, Gcr, r, location, seed)
+        # print('rank: {} got data'.format(rank))#, LC, LR, CL, CC, CR, Glc, Gcr, r, location, seed)
 
         # print('waiting')
         # LR = comm.recv(source=0, tag=1)
@@ -305,11 +305,11 @@ class SlaveMPO:
         Gamma0Out = cp.asnumpy(d_Gamma0Out.data)
         Gamma1Out = cp.asnumpy(d_Gamma1Out.data)
 
-        print('Rank {} finished processing'.format(rank))
+        # print('Rank {} finished processing'.format(rank))
 
         comm.Send(new_charge, 0, tag=10)
         comm.Send(new_Lambda, 0, tag=11)
         comm.Send(Gamma0Out, 0, tag=12)
         comm.Send(Gamma1Out, 0, tag=13)
 
-        print('Rank {} sent data'.format(rank))
+        # print('Rank {} sent data'.format(rank))

@@ -12,8 +12,8 @@ from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
-if rank != 0:
-    cp.cuda.Device((rank-1)%num_gpus).use()
+# if rank != 0:
+#     cp.cuda.Device((rank-1)%num_gpus).use()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--gpu', type=int, help="Which GPU", default=0)
@@ -74,7 +74,7 @@ class MasterMPO:
 
         self.requests = [None for _ in range(self.n - 1)]
         self.requests_buf = [None for _ in range(self.n - 1)]
-        self.available_ranks = [rank for i in range(num_gpus)]
+        self.available_ranks = [rank for rank in range(1, num_gpus+1)]
         self.running_l_and_rank = []
 
     def MPOInitialization(self):
@@ -213,6 +213,8 @@ class MasterMPO:
     #MPO update after a two-qudit gate        
     def MasterRequest(self, l, r, target_rank):
 
+        # print('In master request')
+
         seed = np.random.randint(0, 13579)
 
         # Determining the location of the two qubit gate
@@ -235,6 +237,7 @@ class MasterMPO:
         CC = self.charge[l+1]
         CR = self.charge[l+2]
 
+        # print('sending data to ', target_rank)
         comm.send('New data coming', target_rank, tag=100)
         comm.Send([LC, MPI.FLOAT], target_rank, tag=0)
         comm.Send([LR, MPI.FLOAT], target_rank, tag=1)
@@ -328,18 +331,23 @@ class MasterMPO:
         self.running_l_and_rank = new_running_l_and_rank
 
     def LayerUpdate(self, k):
+        # print('updating layer ', k)
         for i, l in enumerate(range(k % 2, self.n - 1, 2)):
             reflectivity = self.reflectivity[k, i]
+            # print('finished reflectivity')
             start = time.time()
             while len(self.available_ranks) == 0:
+                # print('checking avaiable')
                 self.update_rank_status()
                 time.sleep(0.1)
             target_rank = self.available_ranks.pop(0)
             self.MasterRequest(l, reflectivity, target_rank)
+            # print('finished request')
             self.running_l_and_rank.append([l, target_rank])
             self.update_time += time.time() - start
         while len(self.available_ranks) != num_gpus:
             self.update_rank_status()
+            # print('waiting finish layer')
             time.sleep(0.1)
 
 
@@ -347,7 +355,7 @@ class MasterMPO:
         
         start = time.time()
 
-        self.MPOInitialization()    
+        self.MPOInitialization()
         self.TotalProbPar[0] = self.TotalProbFromMPO()
         self.EEPar[:, 0] = self.MPOEntanglementEntropy()
         alpha_array = [0.5, 0.6, 0.7, 0.8, 0.9]
