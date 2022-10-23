@@ -7,7 +7,7 @@ import numpy as np
 from qutip import squeeze, thermal_dm
 from scipy.stats import rv_continuous
 
-num_gpus = 1
+num_gpus = 4
 from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
@@ -174,9 +174,9 @@ class MasterMPO:
 
         # Sorting bonds based on bond charges
         for i in range(self.n + 1):
-            print('Sorting')
+            # print('Sorting')
             idx = np.lexsort((self.charge[i, :, 1], self.charge[i, :, 0]))
-            print('Indexing')
+            # print('Indexing')
             self.charge[i] = self.charge[i, idx]
             if i > 0:
                 self.Gamma[i - 1] = self.Gamma[i - 1][:, idx]

@@ -64,11 +64,12 @@ class SlaveMPO:
 
     def Slaveloop(self):
 
-        status = None
+        status = status = comm.recv(source=0, tag=100)
+        # print('rank: {}, status: {}'.format(rank, status))
         while status != 'Finished':
-            print('rank: {}, status: {}'.format(rank, status))
             self.SlaveProcess()
             status = comm.recv(source=0, tag=100)
+            # print('rank: {}, status: {}'.format(rank, status))
 
 
     def SlaveProcess(self):

@@ -44,7 +44,7 @@ def MasterMultiCycle(n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = 
 def SlaveMultiCycle(d, chi):
     boson = SlaveMPO(d, chi)
     boson.Slaveloop()
-    print('Slave loop finished')
+    # print('Slave loop finished')
 
 
 def PS_dist(n, r, loss):
