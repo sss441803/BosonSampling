@@ -11,15 +11,31 @@ from qutip import squeeze, thermal_dm
 from Master_GBS_MPO import MasterMPO
 from Slave_GBS_MPO import SlaveMPO
 
-num_gpus = 1
 from mpi4py import MPI
-
+num_gpus_per_node = 4
 comm = MPI.COMM_WORLD
+num_gpu_ranks = comm.Get_size()
+num_gpu_ranks = num_gpu_ranks // 5 * 4
 rank = comm.Get_rank()
-# if rank != 0:
-#     cp.cuda.Device((rank-1)%num_gpus).use()
+# print(rank)
+gpu = (rank%5-1)%num_gpus_per_node
+if rank % 5 != 0:
+    cp.cuda.Device(gpu).use()
+    print('rank {} using gpu {}'.format(rank, gpu))
+#     print(rank)
+#     Rand_U(1,0.1)
+#     glc_obj = Aligner.make_data_obj('glc', True, cp.zeros([8,8],dtype='complex64'), [0, 0])
+#     gcr_obj = Aligner.make_data_obj('glc', True, cp.zeros([8,8],dtype='complex64'), [0, 0])
+#     cl_obj = Aligner.make_data_obj('cl', True, cp.zeros([8,2], dtype='int32'), [0])
+#     cr_obj = Aligner.make_data_obj('cl', True, cp.zeros([8,2], dtype='int32'), [0])
+#     change_charges_C = cp.zeros([2,1], dtype='int32')
+#     change_idx_C = cp.zeros([2,1], dtype='int32')
+#     # update_MPO(1, cp.zeros(8, dtype='int32'), cp.zeros(8, dtype='int32'), cp.zeros([1,1],dtype='float32'), cp.zeros([1,1],dtype='float32'), glc_obj, gcr_obj, cl_obj, cr_obj, change_charges_C, change_idx_C)
+#     print('rank {} successful'.format(rank))
 
-def MasterMultiCycle(n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
+# quit()
+
+def MasterMultiCycle(num_ranks, n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
     TotalProbAvg = np.zeros([n+1])
     EEAvg = np.zeros([n - 1, n+1])
     REAvg = np.zeros([n - 1, n+1, 5])
@@ -28,7 +44,7 @@ def MasterMultiCycle(n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = 
     EETot = np.zeros([n - 1, n+1])
     RETot = np.zeros([n - 1, n+1, 5])
 
-    boson = MasterMPO(n, m, d, r, loss, init_chi, chi, errtol, PS)
+    boson = MasterMPO(num_ranks, n, m, d, r, loss, init_chi, chi, errtol, PS)
     Totprob, EE, RE = boson.FullUpdate()
     TotalProbTot += Totprob;#TotalProbPar[:,i];
     EETot += EE;#EEPar[:,:,i];
@@ -60,26 +76,26 @@ def PS_dist(n, r, loss):
     return prob_dist
 
 
-# parser = argparse.ArgumentParser()
-# parser.add_argument('--gpu', type=int, help="Which GPU", default=0)
-# parser.add_argument('--id', type=int, help="ID of the file to generate corresponding to task number")
-# parser.add_argument('--n', type=int, help='Number of modes.')
-# parser.add_argument('--m', type=int, help='Number of squeezed states. One state per mode from the left.')
-# parser.add_argument('--loss', type=float, help='Photon loss rate.')
-# # parser.add_argument('--chi', type=int, help='Maximum allowed bond dimension')
-# parser.add_argument('--r', type=float, help='Squeezing parameter.')
-# args = vars(parser.parse_args())
+parser = argparse.ArgumentParser()
+parser.add_argument('--gpu', type=int, help="Which GPU", default=0)
+parser.add_argument('--id', type=int, help="ID of the file to generate corresponding to task number")
+parser.add_argument('--n', type=int, help='Number of modes.')
+parser.add_argument('--m', type=int, help='Number of squeezed states. One state per mode from the left.')
+parser.add_argument('--loss', type=float, help='Photon loss rate.')
+# parser.add_argument('--chi', type=int, help='Maximum allowed bond dimension')
+parser.add_argument('--r', type=float, help='Squeezing parameter.')
+args = vars(parser.parse_args())
 
-# gpu = args['gpu']
-# id = args['id']
-# n = args['n']
-# m = args['m']
-# loss = args['loss']
-# # chi = args['chi']
-# r = args['r']
+gpu = args['gpu']
+id = args['id']
+n = args['n']
+m = args['m']
+loss = args['loss']
+# chi = args['chi']
+r = args['r']
 
-n = 6
-m = 2
+# n = 6
+# m = 2
 
 t0 = time.time()
 
@@ -94,9 +110,9 @@ errtol = 10 ** (-7)
 
 # print(i)
 
-for i in range(3):
-    for beta in [0.6, 0.8, 1.0, 1.2]:
-        for r in [1.146, 1.44]:
+for i in range(1):
+    for beta in [1.2]:
+        for r in [1.44]:
             ideal_ave_photons = m#*sinh(r)**2
             lossy_ave_photons = beta*sqrt(ideal_ave_photons)
             loss = round(100*(1 - lossy_ave_photons/ideal_ave_photons))/100
@@ -109,18 +125,18 @@ for i in range(3):
                     print('Too large')
                 continue
             
-            begin_dir = './results/n_{}_m_{}_beta_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, beta, loss, chi, r, PS)
+            begin_dir = './EE_vs_modes/n_{}_m_{}_beta_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, beta, loss, chi, r, PS)
             if not os.path.isdir(begin_dir):
                 os.makedirs(begin_dir)
 
             if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
                 if rank == 0:
-                    Totprob, EE, RE = MasterMultiCycle(n, m, d, r, loss, init_chi, chi, errtol, PS)
+                    Totprob, EE, RE = MasterMultiCycle(num_gpu_ranks, n, m, d, r, loss, init_chi, chi, errtol, PS)
                     print(Totprob)
                     print(EE)
                     
-                    # np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
-                    # np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
+                    np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
+                    np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
 
                     print("Time cost", time.time() - t0)
                 else:

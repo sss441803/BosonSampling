@@ -2,18 +2,12 @@
 import argparse
 import time
 
-import cupy as cp
 import numpy as np
 from qutip import squeeze, thermal_dm
 from scipy.stats import rv_continuous
 
-num_gpus = 4
 from mpi4py import MPI
-
 comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-# if rank != 0:
-#     cp.cuda.Device((rank-1)%num_gpus).use()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--gpu', type=int, help="Which GPU", default=0)
@@ -35,11 +29,9 @@ float_type = np.float32
 int_type = np.int32
 
 
-
-
-
 class MasterMPO:
-    def __init__(self, n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
+    def __init__(self, num_ranks, n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
+        self.num_ranks = num_ranks
         self.n = n
         self.m = m
         self.d = d
@@ -74,7 +66,7 @@ class MasterMPO:
 
         self.requests = [None for _ in range(self.n - 1)]
         self.requests_buf = [None for _ in range(self.n - 1)]
-        self.available_ranks = [rank for rank in range(1, num_gpus+1)]
+        self.available_ranks = [i + i//4 + 1 for i in range(self.num_ranks)]
         self.running_l_and_rank = []
 
     def MPOInitialization(self):
@@ -213,7 +205,7 @@ class MasterMPO:
     #MPO update after a two-qudit gate        
     def MasterRequest(self, l, r, target_rank):
 
-        # print('In master request')
+        print('In master request rank ', target_rank)
 
         seed = np.random.randint(0, 13579)
 
@@ -238,17 +230,17 @@ class MasterMPO:
         CR = self.charge[l+2]
 
         # print('sending data to ', target_rank)
-        comm.send('New data coming', target_rank, tag=100)
-        comm.Send([LC, MPI.FLOAT], target_rank, tag=0)
-        comm.Send([LR, MPI.FLOAT], target_rank, tag=1)
-        comm.Send([CL, MPI.INT], target_rank, tag=2)
-        comm.Send([CC, MPI.INT], target_rank, tag=3)
-        comm.Send([CR, MPI.INT], target_rank, tag=4)
-        comm.Send([Glc, MPI.C_FLOAT_COMPLEX], target_rank, tag=5)
-        comm.Send([Gcr, MPI.C_FLOAT_COMPLEX], target_rank, tag=6)
-        comm.send(r, target_rank, tag=7)
-        comm.send(location, target_rank, tag=8)
-        comm.send(seed, target_rank, tag=9)
+        comm.isend('New data coming', target_rank, tag=100)
+        comm.Isend([LC, MPI.FLOAT], target_rank, tag=0)
+        comm.Isend([LR, MPI.FLOAT], target_rank, tag=1)
+        comm.Isend([CL, MPI.INT], target_rank, tag=2)
+        comm.Isend([CC, MPI.INT], target_rank, tag=3)
+        comm.Isend([CR, MPI.INT], target_rank, tag=4)
+        comm.Isend([Glc, MPI.C_FLOAT_COMPLEX], target_rank, tag=5)
+        comm.Isend([Gcr, MPI.C_FLOAT_COMPLEX], target_rank, tag=6)
+        comm.isend(r, target_rank, tag=7)
+        comm.isend(location, target_rank, tag=8)
+        comm.isend(seed, target_rank, tag=9)
 
         new_charge = self.d * np.ones([self.chi, 2], dtype='int32')
         new_Lambda = np.zeros(self.chi, dtype='float32')
@@ -345,7 +337,7 @@ class MasterMPO:
             # print('finished request')
             self.running_l_and_rank.append([l, target_rank])
             self.update_time += time.time() - start
-        while len(self.available_ranks) != num_gpus:
+        while len(self.available_ranks) != self.num_ranks:
             self.update_rank_status()
             # print('waiting finish layer')
             time.sleep(0.1)
@@ -371,7 +363,7 @@ class MasterMPO:
             '''Initialial total time is much higher than simulation time due to initialization of cuda context.'''
             print("m: {:.2f}. Total time (unreliable): {:.2f}. Update time: {:.2f}. U time: {:.2f}. Theta time: {:.2f}. SVD time: {:.2f}. Align init time: {:.2f}. Align info time: {:.2f}. Index time: {:.2f}. Copy time: {:.2f}. Align time: {:.2f}. Before loop other_time: {:.2f}. Segment1_time: {:.2f}. Segment2_time: {:.2f}. Segment3_time: {:.2f}. Largest array dimension: {:.2f}. Longest time for single matrix: {:.8f}".format(self.m, time.time()-start, self.update_time, self.U_time, self.theta_time, self.svd_time, self.align_init_time, self.align_info_time, self.index_time, self.copy_time, self.align_time, self.before_loop_other_time, self.segment1_time, self.segment2_time, self.segment3_time, self.largest_C, self.largest_T))
 
-        while len(self.available_ranks) != num_gpus:
+        while len(self.available_ranks) != self.num_ranks:
             self.update_rank_status()
             time.sleep(0.1)
 

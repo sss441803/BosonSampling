@@ -6,14 +6,9 @@ import numpy as np
 from cuda_kernels import Rand_U, update_MPO
 from mpo_sort import Aligner
 
-num_gpus = 4
 from mpi4py import MPI
-
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
-# if rank != 0:
-#     cp.cuda.Device((rank-1)%num_gpus).use()
-
 
 
 data_type = np.complex64
@@ -64,12 +59,12 @@ class SlaveMPO:
 
     def Slaveloop(self):
 
-        status = status = comm.recv(source=0, tag=100)
-        # print('rank: {}, status: {}'.format(rank, status))
+        status = comm.recv(source=0, tag=100)
+        print('rank: {}, status: {}'.format(rank, status))
         while status != 'Finished':
             self.SlaveProcess()
             status = comm.recv(source=0, tag=100)
-            # print('rank: {}, status: {}'.format(rank, status))
+            print('rank: {}, status: {}'.format(rank, status))
 
 
     def SlaveProcess(self):
