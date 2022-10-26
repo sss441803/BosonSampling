@@ -1,6 +1,7 @@
 '''Full simulation code containing the Device method (cupy, unified update)'''
 import argparse
 import time
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 from qutip import squeeze, thermal_dm
@@ -50,8 +51,9 @@ class MasterMPO:
         self.normalization = None
         self.update_time = 0
         self.U_time = 0
-        self.svd_time = 0
         self.theta_time = 0
+        self.svd_time = 0
+        self.ee_prob_cal_time = 0
         self.align_init_time = 0
         self.align_info_time = 0
         self.index_time = 0
@@ -66,7 +68,7 @@ class MasterMPO:
 
         self.requests = [None for _ in range(self.n - 1)]
         self.requests_buf = [None for _ in range(self.n - 1)]
-        self.available_ranks = [i + i//4 + 1 for i in range(self.num_ranks)]
+        self.available_ranks = [i + i//16 + 1 for i in range(self.num_ranks)]
         self.running_l_and_rank = []
 
     def MPOInitialization(self):
@@ -177,7 +179,7 @@ class MasterMPO:
             if i < self.n:
                 self.Gamma[i] = self.Gamma[i, idx]
 
-        self.normalization = self.TotalProbFromMPO()
+        self.normalization = TotalProbFromMPO(self.n, self.d, self.Gamma, self.Lambda, self.charge)
         print('Total probability normalization factor: ', self.normalization)
 
         charge_temp = np.copy(self.charge)
@@ -191,13 +193,13 @@ class MasterMPO:
         self.Lambda[:, :init_chi] = Lambda_temp
         self.charge[:, :init_chi] = charge_temp
 
-        print('Canonicalization update')
-        for l in range(self.n - 1):
-            self.MasterRequest(l, 0, 1)
-            done = False
-            while not done:
-                done = self.MasterCheck(l)
-                time.sleep(0.1)
+        # print('Canonicalization update')
+        # for l in range(self.n - 1):
+        #     self.MasterRequest(l, 0, 1)
+        #     done = False
+        #     while not done:
+        #         done = self.MasterCheck(l)
+        #         time.sleep(0.1)
 
         self.UpdateReflectivity()
 
@@ -229,6 +231,8 @@ class MasterMPO:
         CC = self.charge[l+1]
         CR = self.charge[l+2]
 
+        # print('Sending info to rank ', target_rank)
+
         # print('sending data to ', target_rank)
         comm.isend('New data coming', target_rank, tag=100)
         comm.Isend([LC, MPI.FLOAT], target_rank, tag=0)
@@ -242,6 +246,8 @@ class MasterMPO:
         comm.isend(location, target_rank, tag=8)
         comm.isend(seed, target_rank, tag=9)
 
+        # print('Sent info to rank ', target_rank)
+
         new_charge = self.d * np.ones([self.chi, 2], dtype='int32')
         new_Lambda = np.zeros(self.chi, dtype='float32')
         Gamma0Out = np.zeros([self.chi, self.chi], dtype='complex64')
@@ -251,19 +257,47 @@ class MasterMPO:
         Gamma0Out_req = comm.Irecv(Gamma0Out, source=target_rank, tag=12)
         Gamma1Out_req = comm.Irecv(Gamma1Out, source=target_rank, tag=13)
 
-        self.requests[l] = [new_charge_req, new_Lambda_req, Gamma0Out_req, Gamma1Out_req]
+        # print('Requested info from rank ', target_rank)
+        U_time_req = comm.irecv(source=target_rank, tag=14)
+        svd_time_req = comm.irecv(source=target_rank, tag=15)
+        theta_time_req = comm.irecv(source=target_rank, tag=16)
+        align_init_time_req = comm.irecv(source=target_rank, tag=17)
+        align_info_time_req = comm.irecv(source=target_rank, tag=18)
+        index_time_req = comm.irecv(source=target_rank, tag=19)
+        copy_time_req = comm.irecv(source=target_rank, tag=20)
+        align_time_req = comm.irecv(source=target_rank, tag=21)
+        before_loop_other_time_req = comm.irecv(source=target_rank, tag=22)
+        segment1_time_req = comm.irecv(source=target_rank, tag=23)
+        segment2_time_req = comm.irecv(source=target_rank, tag=24)
+        segment3_time_req = comm.irecv(source=target_rank, tag=25)
+        self.requests[l] = [new_charge_req, new_Lambda_req, Gamma0Out_req, Gamma1Out_req, U_time_req, svd_time_req, theta_time_req, align_init_time_req, align_info_time_req, index_time_req, copy_time_req, align_time_req, before_loop_other_time_req, segment1_time_req, segment2_time_req, segment3_time_req]
         self.requests_buf[l] = [new_charge, new_Lambda, Gamma0Out, Gamma1Out]
+        # print('Master request over with rank ', target_rank)
 
 
     def MasterCheck(self, l) -> bool:
 
         # Determining if slave computational results are ready
-        completed = MPI.Request.Testall(self.requests[l])
-        if not completed:
+        completed = MPI.Request.testall(self.requests[l])
+        if not completed[0]:
+            # print('Not done')
             return False
 
         # Loading slave computational results
         new_charge, new_Lambda, Gamma0Out, Gamma1Out = self.requests_buf[l]
+        _, _, _, _, U_time, svd_time, theta_time, align_init_time, align_info_time, index_time, copy_time, align_time, before_loop_other_time, segment1_time, segment2_time, segment3_time = completed[1]
+        self.U_time += U_time
+        self.svd_time += svd_time
+        self.theta_time += theta_time
+        self.align_init_time += align_init_time
+        self.align_info_time += align_info_time
+        self.index_time += index_time
+        self.copy_time += copy_time
+        self.align_time += align_time
+        self.before_loop_other_time += before_loop_other_time
+        self.segment1_time += segment1_time
+        self.segment2_time += segment2_time
+        self.segment3_time += segment3_time
 
         # Update charges (modifying CC modifies self.dcharge by pointer)
         self.charge[l + 1] = new_charge
@@ -321,13 +355,27 @@ class MasterMPO:
             else:
                 new_running_l_and_rank.append([l, rank])
         self.running_l_and_rank = new_running_l_and_rank
+        # print(self.running_l_and_rank)
 
     def LayerUpdate(self, k):
         # print('updating layer ', k)
+        start = time.time()
+        self.U_time = 0
+        self.svd_time = 0
+        self.theta_time = 0
+        self.align_init_time = 0
+        self.align_info_time = 0
+        self.index_time = 0
+        self.copy_time = 0
+        self.align_time = 0
+        self.before_loop_other_time = 0
+        self.segment1_time = 0
+        self.segment2_time = 0
+        self.segment3_time = 0
         for i, l in enumerate(range(k % 2, self.n - 1, 2)):
             reflectivity = self.reflectivity[k, i]
             # print('finished reflectivity')
-            start = time.time()
+            print(self.available_ranks)
             while len(self.available_ranks) == 0:
                 # print('checking avaiable')
                 self.update_rank_status()
@@ -336,32 +384,33 @@ class MasterMPO:
             self.MasterRequest(l, reflectivity, target_rank)
             # print('finished request')
             self.running_l_and_rank.append([l, target_rank])
-            self.update_time += time.time() - start
         while len(self.available_ranks) != self.num_ranks:
             self.update_rank_status()
             # print('waiting finish layer')
             time.sleep(0.1)
+        self.update_time += time.time() - start
 
 
     def FullUpdate(self):
-        
-        start = time.time()
 
         self.MPOInitialization()
-        self.TotalProbPar[0] = self.TotalProbFromMPO()
+        self.TotalProbPar[0] = TotalProbFromMPO(self.n, self.d, self.Gamma, self.Lambda, self.charge)
         self.EEPar[:, 0] = self.MPOEntanglementEntropy()
-        alpha_array = [0.5, 0.6, 0.7, 0.8, 0.9]
+        # alpha_array = [0.5, 0.6, 0.7, 0.8, 0.9]
+        # for i in range(5):
+            # self.REPar[:, 0, i] = self.MPORenyiEntropy(alpha_array[i])
+        full_start = time.time()
 
-        for i in range(5):
-            self.REPar[:, 0, i] = self.MPORenyiEntropy(alpha_array[i])
         for k in range(self.n):
             self.LayerUpdate(k)
-            self.TotalProbPar[k + 1] = self.TotalProbFromMPO()
-            self.EEPar[:, k + 1] = self.MPOEntanglementEntropy()
-            for i in range(5):
-                self.REPar[:, k + 1, i] = self.MPORenyiEntropy(alpha_array[i])
+            start = time.time()
+            self.TotalProbPar[k+1] = TotalProbFromMPO(self.n, self.d, self.Gamma, self.Lambda, self.charge)
+            self.EEPar[:, k+1] = self.MPOEntanglementEntropy()
+            self.ee_prob_cal_time += time.time() - start
+            # for i in range(5):
+                # self.REPar[:, k + 1, i] = self.MPORenyiEntropy(alpha_array[i])
             '''Initialial total time is much higher than simulation time due to initialization of cuda context.'''
-            print("m: {:.2f}. Total time (unreliable): {:.2f}. Update time: {:.2f}. U time: {:.2f}. Theta time: {:.2f}. SVD time: {:.2f}. Align init time: {:.2f}. Align info time: {:.2f}. Index time: {:.2f}. Copy time: {:.2f}. Align time: {:.2f}. Before loop other_time: {:.2f}. Segment1_time: {:.2f}. Segment2_time: {:.2f}. Segment3_time: {:.2f}. Largest array dimension: {:.2f}. Longest time for single matrix: {:.8f}".format(self.m, time.time()-start, self.update_time, self.U_time, self.theta_time, self.svd_time, self.align_init_time, self.align_info_time, self.index_time, self.copy_time, self.align_time, self.before_loop_other_time, self.segment1_time, self.segment2_time, self.segment3_time, self.largest_C, self.largest_T))
+            print("m: {:.2f}. Total time: {:.2f}. Update time: {:.2f}. Theta time: {:.2f}. SVD time: {:.2f}. EE_Prob_cal_time: {:.2f}. Align time: {:.2f}. ".format(self.m, time.time()-full_start, self.update_time, self.theta_time, self.svd_time, self.ee_prob_cal_time, self.align_time))
 
         while len(self.available_ranks) != self.num_ranks:
             self.update_rank_status()
@@ -372,25 +421,6 @@ class MasterMPO:
 
         return self.TotalProbPar, self.EEPar, self.REPar
     
-    def TotalProbFromMPO(self):
-        R = self.Gamma[self.n - 1, :, 0]
-        RTemp = np.copy(R)
-        for k in range(self.n - 2):
-            idx = np.array([], dtype = 'int32')
-            for ch in range(self.d):
-                idx = np.append(idx, np.intersect1d(np.nonzero(self.charge[self.n - 1 - k, :, 0] == ch), np.intersect1d(np.nonzero(self.charge[self.n - 1 - k, :, 1] == ch), np.nonzero(self.Lambda[self.n - 1 - k - 1] > 0))))
-            R = np.matmul(self.Gamma[self.n - 1 - k - 1, :, idx].T, RTemp[idx].reshape(-1))
-            RTemp = np.copy(R)
-        idx = np.array([], dtype = 'int32')
-        for ch in range(self.d):
-            idx = np.append(idx, np.intersect1d(np.nonzero(self.charge[1, :, 0] == ch), np.intersect1d(np.nonzero(self.charge[1, :, 1] == ch), np.nonzero(self.Lambda[0, :] > 0))))
-        res = np.matmul(self.Gamma[0, :, idx].T, RTemp[idx].reshape(-1))
-        tot_prob = np.sum(res)
-        print('Probability: ', np.real(tot_prob))
-        # if self.normalization != None:
-        #     if tot_prob/self.normalization > 1.05 or tot_prob/self.normalization < 0.95:
-        #         quit()
-        return tot_prob
     
     def MPOEntanglementEntropy(self):      
         Output = np.zeros([self.n - 1])
@@ -432,6 +462,26 @@ class my_pdf(rv_continuous):
     def _pdf(self, x, k, idx):
         return (k - idx) * (1 - x) ** (k - idx - 1)
 my_cv = my_pdf(a = 0, b = 1, name='my_pdf')
+
+def TotalProbFromMPO(n, d, Gamma, Lambda, charge):
+    R = Gamma[n - 1, :, 0]
+    RTemp = np.copy(R)
+    for k in range(n - 2):
+        idx = np.array([], dtype = 'int32')
+        for ch in range(d):
+            idx = np.append(idx, np.intersect1d(np.nonzero(charge[n - 1 - k, :, 0] == ch), np.intersect1d(np.nonzero(charge[n - 1 - k, :, 1] == ch), np.nonzero(Lambda[n - 1 - k - 1] > 0))))
+        R = np.matmul(Gamma[n - 1 - k - 1, :, idx].T, RTemp[idx].reshape(-1))
+        RTemp = np.copy(R)
+    idx = np.array([], dtype = 'int32')
+    for ch in range(d):
+        idx = np.append(idx, np.intersect1d(np.nonzero(charge[1, :, 0] == ch), np.intersect1d(np.nonzero(charge[1, :, 1] == ch), np.nonzero(Lambda[0, :] > 0))))
+    res = np.matmul(Gamma[0, :, idx].T, RTemp[idx].reshape(-1))
+    tot_prob = np.sum(res)
+    print('Probability: ', np.real(tot_prob))
+    # if self.normalization != None:
+    #     if tot_prob/self.normalization > 1.05 or tot_prob/self.normalization < 0.95:
+    #         quit()
+    return tot_prob
 
 def EntropyFromColumn(InputColumn):
     Output = -np.nansum(InputColumn * np.log2(InputColumn))

@@ -3,6 +3,7 @@ import argparse
 import os
 import time
 from math import sinh, sqrt
+import sys
 
 import cupy as cp
 import numpy as np
@@ -15,11 +16,11 @@ from mpi4py import MPI
 num_gpus_per_node = 4
 comm = MPI.COMM_WORLD
 num_gpu_ranks = comm.Get_size()
-num_gpu_ranks = num_gpu_ranks // 5 * 4
+num_gpu_ranks = num_gpu_ranks // 17 * 16
 rank = comm.Get_rank()
 # print(rank)
-gpu = (rank%5-1)%num_gpus_per_node
-if rank % 5 != 0:
+gpu = (rank%17-1)%num_gpus_per_node
+if rank % 17 != 0:
     cp.cuda.Device(gpu).use()
     print('rank {} using gpu {}'.format(rank, gpu))
 #     print(rank)
@@ -76,100 +77,71 @@ def PS_dist(n, r, loss):
     return prob_dist
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--gpu', type=int, help="Which GPU", default=0)
-parser.add_argument('--id', type=int, help="ID of the file to generate corresponding to task number")
-parser.add_argument('--n', type=int, help='Number of modes.')
-parser.add_argument('--m', type=int, help='Number of squeezed states. One state per mode from the left.')
-parser.add_argument('--loss', type=float, help='Photon loss rate.')
-# parser.add_argument('--chi', type=int, help='Maximum allowed bond dimension')
-parser.add_argument('--r', type=float, help='Squeezing parameter.')
-args = vars(parser.parse_args())
+def main():
 
-gpu = args['gpu']
-id = args['id']
-n = args['n']
-m = args['m']
-loss = args['loss']
-# chi = args['chi']
-r = args['r']
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--gpu', type=int, help="Which GPU", default=0)
+    parser.add_argument('--id', type=int, help="ID of the file to generate corresponding to task number")
+    parser.add_argument('--n', type=int, help='Number of modes.')
+    parser.add_argument('--m', type=int, help='Number of squeezed states. One state per mode from the left.')
+    parser.add_argument('--loss', type=float, help='Photon loss rate.')
+    # parser.add_argument('--chi', type=int, help='Maximum allowed bond dimension')
+    parser.add_argument('--r', type=float, help='Squeezing parameter.')
+    args = vars(parser.parse_args())
 
-# n = 6
-# m = 2
+    gpu = args['gpu']
+    id = args['id']
+    n = args['n']
+    m = args['m']
+    loss = args['loss']
+    # chi = args['chi']
+    r = args['r']
 
-t0 = time.time()
+    t0 = time.time()
 
-errtol = 10 ** (-7)
-# # PS = m; d = PS + 1; chi = 8 * 2**m; init_chi = d**2
-# prob_dist = PS_dist(m, r, loss)
-# cum_prob = 0
-# i = 0
-# while cum_prob < 0.99:
-#     cum_prob += prob_dist[i]
-#     i += 1
+    errtol = 10 ** (-7)
 
-# print(i)
-
-for i in range(1):
-    for beta in [1.2]:
-        for r in [1.44]:
-            ideal_ave_photons = m#*sinh(r)**2
-            lossy_ave_photons = beta*sqrt(ideal_ave_photons)
-            loss = round(100*(1 - lossy_ave_photons/ideal_ave_photons))/100
-            PS = int((1-loss)*m*sinh(r)**2); d = PS+1; init_chi = d**2
-            chi = int(max(32*2**PS, d**2, 128))
-            if rank == 0:
-                print('m is ',  m, ', d is ', d, ', r is ', r, ', beta is ', beta, ', chi is ', chi)
-            if chi > 8200:
+    for i in range(1):
+        for beta in [1.2]:
+            for r in [0.88]:
+                ideal_ave_photons = m#*sinh(r)**2
+                lossy_ave_photons = beta*sqrt(ideal_ave_photons)
+                loss = round(100*(1 - lossy_ave_photons/ideal_ave_photons))/100
+                PS = int((1-loss)*m*sinh(r)**2); d = PS+1; init_chi = d**2
+                chi = int(max(32*2**PS, d**2, 128))
                 if rank == 0:
-                    print('Too large')
-                continue
-            
-            begin_dir = './EE_vs_modes/n_{}_m_{}_beta_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, beta, loss, chi, r, PS)
-            if not os.path.isdir(begin_dir):
-                os.makedirs(begin_dir)
+                    print('m is ',  m, ', d is ', d, ', r is ', r, ', beta is ', beta, ', chi is ', chi)
+                if chi > 8200:
+                    if rank == 0:
+                        print('Too large')
+                    continue
+                
+                begin_dir = './EE_vs_modes/n_{}_m_{}_beta_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, beta, loss, chi, r, PS)
+                if not os.path.isdir(begin_dir) and rank == 0:
+                    os.makedirs(begin_dir)
 
-            if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
-                if rank == 0:
-                    Totprob, EE, RE = MasterMultiCycle(num_gpu_ranks, n, m, d, r, loss, init_chi, chi, errtol, PS)
-                    print(Totprob)
-                    print(EE)
-                    
-                    np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
-                    np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
+                if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
+                    if rank == 0:
+                        Totprob, EE, RE = MasterMultiCycle(num_gpu_ranks, n, m, d, r, loss, init_chi, chi, errtol, PS)
+                        print(Totprob)
+                        print(EE)
+                        
+                        np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
+                        np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
 
-                    print("Time cost", time.time() - t0)
+                        print("Time cost", time.time() - t0)
+                    else:
+                        SlaveMultiCycle(d, chi)
                 else:
-                    SlaveMultiCycle(d, chi)
-            else:
-                if rank == 0:
-                    print("Simulation already ran.")
-    m += 4
+                    if rank == 0:
+                        print("Simulation already ran.")
+        m += 4
 
-    
-    # max_d = 11
-        
-    # for PS in range(max_d):
-    #     if PS%2 == 1 and loss == 0:
-    #         continue
-    #     errtol = 10 ** (-7) #/ prob_dist[PS]
-    #     d = PS + 1; chi = max(2**(PS+2*m-3), d**2, 128); init_chi = d**2
-    #     if chi > 8200:
-    #         continue
-    #     print('m is ', m, ', d is ', d, ', errtol is ', errtol, ', chi is ', chi)
-        
-    #     begin_dir = './results/n_{}_m_{}_loss_{}_r_{}/chi_{}_PS_{}'.format(n, m, loss, r, chi, PS)
-    #     if not os.path.isdir(begin_dir):
-    #         os.makedirs(begin_dir)
 
-    #     if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
-    #         Totprob, EE, RE = RCS1DMultiCycleAvg(n, m, d, r, loss, init_chi, chi, errtol, PS)
-    #         print(Totprob)
-    #         # print(EE)
-            
-    #         np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
-    #         np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
-
-    #         print("Time cost", time.time() - t0)
-    #     else:
-    #         print("Simulation already ran.")
+if __name__ == "__main__":
+    # def mpiabort_excepthook(type, value, traceback):
+    #     comm.Abort()
+    #     sys.__excepthook__(type, value, traceback)
+    # # sys.excepthook = mpiabort_excepthook
+    main()
+    # sys.excepthook = sys.__excepthook__

@@ -60,11 +60,11 @@ class SlaveMPO:
     def Slaveloop(self):
 
         status = comm.recv(source=0, tag=100)
-        print('rank: {}, status: {}'.format(rank, status))
+        # print('rank: {}, status: {}'.format(rank, status))
         while status != 'Finished':
             self.SlaveProcess()
             status = comm.recv(source=0, tag=100)
-            print('rank: {}, status: {}'.format(rank, status))
+            # print('rank: {}, status: {}'.format(rank, status))
 
 
     def SlaveProcess(self):
@@ -109,6 +109,7 @@ class SlaveMPO:
         # Initializing unitary matrix on GPU
         np.random.seed(seed)
         start = time.time()
+        # print('reflectivity ', r)
         d_U_r, d_U_i = Rand_U(self.d, r)
         #print(U_r[0,0,0])
         self.U_time += time.time() - start
@@ -307,5 +308,17 @@ class SlaveMPO:
         comm.Send(new_Lambda, 0, tag=11)
         comm.Send(Gamma0Out, 0, tag=12)
         comm.Send(Gamma1Out, 0, tag=13)
+        comm.send(self.U_time, 0, tag=14)
+        comm.send(self.svd_time, 0, tag=15)
+        comm.send(self.theta_time, 0, tag=16)
+        comm.send(self.align_init_time, 0, tag=17)
+        comm.send(self.align_info_time, 0, tag=18)
+        comm.send(self.index_time, 0, tag=19)
+        comm.send(self.copy_time, 0, tag=20)
+        comm.send(self.align_time, 0, tag=21)
+        comm.send(self.before_loop_other_time, 0, tag=22)
+        comm.send(self.segment1_time, 0, tag=23)
+        comm.send(self.segment2_time, 0, tag=24)
+        comm.send(self.segment3_time, 0, tag=25)
 
         # print('Rank {} sent data'.format(rank))
