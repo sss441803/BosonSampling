@@ -69,15 +69,16 @@ class NodeMPO:
         comm.send(charge_c_1, target_rank, tag=1)
 
         # Receiving results (non-blocking)
-        d_V = cp.empty([left_size, left_size], dtype='complex64')
-        d_W = cp.empty([right_size, right_size], dtype='complex64')
-        d_Lambda = cp.empty(min(left_size, right_size), dtype='float32')
+        num_eig = min(left_size, right_size)
+        V = np.empty([left_size, num_eig], dtype='complex64')
+        W = np.empty([num_eig, right_size], dtype='complex64')
+        Lambda = np.empty(num_eig, dtype='float32')
         requests = []
-        requests.append(comm.Irecv(d_V, source=target_rank, tag=0))
-        requests.append(comm.Irecv(d_W, source=target_rank, tag=1))
-        requests.append(comm.Irecv(d_Lambda, source=target_rank, tag=2))
+        requests.append(comm.Irecv(V, source=target_rank, tag=0))
+        requests.append(comm.Irecv(W, source=target_rank, tag=1))
+        requests.append(comm.Irecv(Lambda, source=target_rank, tag=2))
         self.requests[charge_c_0][charge_c_1] = requests
-        self.requests_buf[charge_c_0][charge_c_1] = [d_V, d_W, d_Lambda]
+        self.requests_buf[charge_c_0][charge_c_1] = [V, W, Lambda]
 
 
     def Check(self, charge_c_0, charge_c_1) -> bool:
@@ -130,6 +131,7 @@ class NodeMPO:
         aligner = Aligner(self.d, CL, CC, CR)
         # Obtain and align data
         cNewL_obj, cNewR_obj, change_charges_C_data, change_idx_C = aligner.cNewL, aligner.cNewR, aligner.change_charges_C, aligner.change_idx_C
+
         changes = change_idx_C.shape[0]
         change_charges_C = np.zeros([2, (self.d+1)**2], dtype='int32')
         change_charges_C[:, :changes] = change_charges_C_data
@@ -193,7 +195,7 @@ class NodeMPO:
                 while len(self.available_ranks) == 0:
                     # print('checking avaiable')
                     self.update_rank_status()
-                    time.sleep(0.1)
+                    time.sleep(0.01)
                 target_rank = self.available_ranks.pop(0)
                 self.Request(charge_c_0, charge_c_1, left_size, right_size, target_rank)
                 # print('finished request')
@@ -204,7 +206,7 @@ class NodeMPO:
         while len(self.available_ranks) != self.num_ranks:
             self.update_rank_status()
             # print('waiting finish layer')
-            time.sleep(0.1)
+            time.sleep(0.01)
 
         for target_rank in self.available_ranks:
             comm.send('Node Finished', target_rank, tag=101)
@@ -222,10 +224,9 @@ class NodeMPO:
             for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1):
                 if self.requests_buf[charge_c_0][charge_c_1] == None:
                     continue
-                d_V, d_W, d_Lambda = self.requests_buf[charge_c_0][charge_c_1]
-                Lambda = cp.asnumpy(d_Lambda)
-                new_Gamma_L = new_Gamma_L + [d_V[:, i] for i in range(len(Lambda))]
-                new_Gamma_R = new_Gamma_R + [d_W[i, :] for i in range(len(Lambda))]
+                V, W, Lambda = self.requests_buf[charge_c_0][charge_c_1]
+                new_Gamma_L = new_Gamma_L + [V[:, i] for i in range(len(Lambda))]
+                new_Gamma_R = new_Gamma_R + [W[i, :] for i in range(len(Lambda))]
                 new_Lambda = np.append(new_Lambda, Lambda)
                 new_charge_0 = np.append(new_charge_0, np.repeat(np.array(charge_c_0, dtype=int_type), len(Lambda)))
                 new_charge_1 = np.append(new_charge_1, np.repeat(np.array(charge_c_1, dtype=int_type), len(Lambda)))
@@ -239,8 +240,8 @@ class NodeMPO:
             idx_select = np.array([], dtype=int_type)
         
         # Initialize selected and sorted Gamma outputs
-        d_Gamma0Out = Aligner.make_data_obj('Glc', False, cp.zeros([self.chi, self.chi], dtype = data_type), [0, 0])
-        d_Gamma1Out = Aligner.make_data_obj('Gcr', False, cp.zeros([self.chi, self.chi], dtype = data_type), [0, 0])
+        Gamma0Out = Aligner.make_data_obj('Glc', False, np.zeros([self.chi, self.chi], dtype = data_type), [0, 0])
+        Gamma1Out = Aligner.make_data_obj('Gcr', False, np.zeros([self.chi, self.chi], dtype = data_type), [0, 0])
 
         # Indices of eigenvalues that mark the beginning of center charge tau
         cum_tau_array = np.cumsum(tau_array)
@@ -258,8 +259,8 @@ class NodeMPO:
                 # Selecting gamma that will be modified. Modifying gamma will modify Gamma (because they are pointers).
                 min_charge_l_0, max_charge_l_0, _, _, min_charge_r_0, max_charge_r_0 = self.charge_range(location, charge_c_0)
                 min_charge_l_1, max_charge_l_1, _, _, min_charge_r_1, max_charge_r_1 = self.charge_range(location, charge_c_1)
-                idx_gamma0_0, idx_gamma0_1 = aligner.get_select_index(d_Gamma0Out, min_charge_l_0, max_charge_l_0, min_charge_l_1, max_charge_l_1, 0, self.d, 0, self.d)
-                idx_gamma1_0, idx_gamma1_1 = aligner.get_select_index(d_Gamma1Out, 0, self.d, 0, self.d, min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1)
+                idx_gamma0_0, idx_gamma0_1 = aligner.get_select_index(Gamma0Out, min_charge_l_0, max_charge_l_0, min_charge_l_1, max_charge_l_1, 0, self.d, 0, self.d)
+                idx_gamma1_0, idx_gamma1_1 = aligner.get_select_index(Gamma1Out, 0, self.d, 0, self.d, min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1)
                 # Finding bond indices (tau_idx) that are in the largest num_lambda singular values and for center charge tau.
                 # idx_select[indices] = tau_idx
                 tau_idx, indices, _ = np.intersect1d(idx_select, np.arange(cum_tau_array[tau], cum_tau_array[tau + 1]), return_indices = True)
@@ -271,18 +272,18 @@ class NodeMPO:
                 self.segment1_time += time.time() - start
                 # start = time.time()
                 # Left and right singular vectors that corresponds to the largest num_lambda singular values and center charge tau
-                d_V = cp.array([new_Gamma_L[i] for i in tau_idx], dtype = 'complex64')
-                d_W = cp.array([new_Gamma_R[i] for i in tau_idx], dtype = 'complex64')
-                d_V = d_V.T
+                V = np.array([new_Gamma_L[i] for i in tau_idx], dtype = 'complex64')
+                W = np.array([new_Gamma_R[i] for i in tau_idx], dtype = 'complex64')
+                V = V.T
                 cp.cuda.stream.get_current_stream().synchronize()
                 self.segment2_time += time.time() - start
                 # start = time.time()
 
                 # Calculating output gamma
                 # Left
-                d_Gamma0Out.data[idx_gamma0_0.reshape(-1,1), idx_gamma0_1[indices].reshape(1,-1)] = d_V
+                Gamma0Out.data[idx_gamma0_0.reshape(-1,1), idx_gamma0_1[indices].reshape(1,-1)] = V
                 # Right
-                d_Gamma1Out.data[idx_gamma1_0[indices].reshape(-1,1), idx_gamma1_1.reshape(1,-1)] = d_W
+                Gamma1Out.data[idx_gamma1_0[indices].reshape(-1,1), idx_gamma1_1.reshape(1,-1)] = W
                 
                 cp.cuda.stream.get_current_stream().synchronize()
                 self.segment3_time += time.time() - start
@@ -299,7 +300,9 @@ class NodeMPO:
         idx_sort = np.lexsort((new_charge_1, new_charge_0)) # Indices that will sort the new charges
         new_charge_0 = new_charge_0[idx_sort]
         new_charge_1 = new_charge_1[idx_sort]
-        new_charge = np.concatenate([new_charge_0.reshape(-1, 1), new_charge_1.reshape(-1, 1)], axis=1)
+        new_charge = self.d * np.ones([self.chi, 2], dtype='int32')
+        new_charge[:num_lambda, 0] = new_charge_0
+        new_charge[:num_lambda, 1] = new_charge_1
         
         # Selecting and sorting Lambda
         new_Lambda = new_Lambda[idx_select]
@@ -311,11 +314,11 @@ class NodeMPO:
         #     print(np.max(new_Lambda))
 
         # Sorting Gamma
-        d_Gamma0Out.data[:, :num_lambda] = d_Gamma0Out.data[:, idx_sort]
-        d_Gamma1Out.data[:num_lambda] = d_Gamma1Out.data[idx_sort]
+        Gamma0Out.data[:, :num_lambda] = Gamma0Out.data[:, idx_sort]
+        Gamma1Out.data[:num_lambda] = Gamma1Out.data[idx_sort]
 
-        Gamma0Out = cp.asnumpy(d_Gamma0Out.data)
-        Gamma1Out = cp.asnumpy(d_Gamma1Out.data)
+        Gamma0Out = cp.asnumpy(Gamma0Out.data)
+        Gamma1Out = cp.asnumpy(Gamma1Out.data)
 
         # print('Rank {} finished processing'.format(rank))
 

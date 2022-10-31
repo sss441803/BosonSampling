@@ -64,6 +64,7 @@ class RankMPO:
         # print('rank: {}, node status: {}'.format(rank, status))
         while status != 'Full Finished':
             self.NodeRankloop()
+            # print('Node finished')
             status = comm.recv(source=self.node_control_rank, tag=100)
             # print('rank: {}, node status: {}'.format(rank, status))
 
@@ -88,6 +89,7 @@ class RankMPO:
         change_charges_C = change_charges_C[:, :changes]
         change_idx_C = change_idx_C[:changes]
         np.random.seed(seed)
+        # print('seed: ', seed)
         d_U_r, d_U_i = Rand_U(self.d, r)
 
         # Moving data to GPU
@@ -103,6 +105,7 @@ class RankMPO:
             charge_c_0 = comm.recv(source=self.node_control_rank, tag=0)
             charge_c_1 = comm.recv(source=self.node_control_rank, tag=1)
             self.RankProcess(charge_c_0, charge_c_1, d_U_r, d_U_i, d_change_charges_C, d_change_idx_C, d_cNewL_obj, d_cNewR_obj, d_LR_obj, d_Glc_obj, d_Gcr_obj, aligner, location)
+            # print('Rank finished')
             status = comm.recv(source=self.node_control_rank, tag=101)
             # print('rank: {}, status: {}'.format(rank, status))
 
@@ -122,7 +125,6 @@ class RankMPO:
                                                 min_charge_c_0, max_charge_c_0, min_charge_c_1, max_charge_c_1)
         d_gcr_obj = aligner.select_data(d_Gcr_obj, min_charge_c_0, max_charge_c_0, min_charge_c_1, max_charge_c_1,
                                                 min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1)
-
         self.align_time += time.time() - start
 
         start = time.time()
@@ -132,8 +134,8 @@ class RankMPO:
         d_T_obj = d_C_obj.clone()
         d_T_obj.data = cp.multiply(d_C_obj.data, d_lr_obj.data)
         d_C = aligner.compact_data(d_C_obj)
-        # print('T: ', d_T_obj.data)
         d_T = aligner.compact_data(d_T_obj)
+        # print('T: ', d_T)
         
         dt = time.time() - start
         self.largest_T = max(dt, self.largest_T)
@@ -146,6 +148,6 @@ class RankMPO:
         self.svd_time += time.time() - start
         
         # Sending results back to node
-        comm.Send([d_V, MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=0)
-        comm.Send([d_W, MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=1)
-        comm.Send([d_Lambda, MPI.FLOAT], self.node_control_rank, tag=2)
+        comm.Send([cp.asnumpy(d_V), MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=0)
+        comm.Send([cp.asnumpy(d_W), MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=1)
+        comm.Send([cp.asnumpy(d_Lambda), MPI.FLOAT], self.node_control_rank, tag=2)

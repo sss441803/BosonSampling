@@ -17,13 +17,13 @@ from mpi4py import MPI
 
 
 def FullMultiCycle(nodes, ranks_per_node, n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
-    TotalProbAvg = np.zeros([n+1])
-    EEAvg = np.zeros([n - 1, n+1])
-    REAvg = np.zeros([n - 1, n+1, 5])
+    TotalProbAvg = np.zeros([n])
+    EEAvg = np.zeros([n - 1, n])
+    REAvg = np.zeros([n - 1, n, 5])
 
-    TotalProbTot = np.zeros([n+1])
-    EETot = np.zeros([n - 1, n+1])
-    RETot = np.zeros([n - 1, n+1, 5])
+    TotalProbTot = np.zeros([n])
+    EETot = np.zeros([n - 1, n])
+    RETot = np.zeros([n - 1, n, 5])
 
     boson = FullMPO(nodes, ranks_per_node, n, m, d, r, loss, init_chi, chi, errtol, PS)
     Totprob, EE, RE = boson.FullUpdate()
@@ -100,12 +100,13 @@ errtol = 10 ** (-7)
 
 for i in range(1):
     for beta in [1.2]:
-        for r in [0.88]:
+        for r in [1.144]:
             ideal_ave_photons = m#*sinh(r)**2
             lossy_ave_photons = beta*sqrt(ideal_ave_photons)
             loss = round(100*(1 - lossy_ave_photons/ideal_ave_photons))/100
             PS = int((1-loss)*m*sinh(r)**2); d = PS+1; init_chi = d**2
             chi = int(max(32*2**PS, d**2, 128))
+
             if rank == 0:
                 print('m is ',  m, ', d is ', d, ', r is ', r, ', beta is ', beta, ', chi is ', chi)
             if chi > 8200:

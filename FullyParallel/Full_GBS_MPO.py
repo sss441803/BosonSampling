@@ -10,7 +10,7 @@ comm = MPI.COMM_WORLD
 
 # mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
 
-np.random.seed(1)
+# np.random.seed(1)
 np.set_printoptions(precision=3)
 
 data_type = np.complex64
@@ -20,6 +20,7 @@ int_type = np.int32
 
 class FullMPO:
     def __init__(self, nodes, ranks_per_node, n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
+
         self.n = n
         self.m = m
         self.d = d
@@ -29,10 +30,10 @@ class FullMPO:
         self.init_chi = init_chi
         self.chi = chi
         self.errtol = errtol
-        self.TotalProbPar = np.zeros([n+1], dtype = 'float32')
-        self.SingleProbPar = np.zeros([n+1], dtype = 'float32')
-        self.EEPar = np.zeros([n - 1, n+1], dtype = 'float32')      
-        self.REPar = np.zeros([n - 1, n+1, 5], dtype = 'float32')
+        self.TotalProbPar = np.zeros([n], dtype = 'float32')
+        self.SingleProbPar = np.zeros([n], dtype = 'float32')
+        self.EEPar = np.zeros([n - 1, n], dtype = 'float32')      
+        self.REPar = np.zeros([n - 1, n, 5], dtype = 'float32')
         self.reflectivity = np.empty([self.n, self.n // 2])
         self.PS = PS
         self.normalization = None
@@ -108,22 +109,15 @@ class FullMPO:
                     for ch_diff2 in range(c2, -1, -1):
                         if np.abs(sq[ch_diff1, ch_diff2]) <= self.errtol:
                             continue
-                        #self.Gamma_temp[j, chi_, i] = sq[ch_diff1, ch_diff2]
-                        #self.charge[chi_, i + 1, 0] = c1 - ch_diff1
-                        #self.charge[chi_, i + 1, 1] = c2 - ch_diff2
                         self.Gamma[j, (c1 - ch_diff1) * d + c2 - ch_diff2, i] = sq[ch_diff1, ch_diff2]
                         self.charge[(c1 - ch_diff1) * d + c2 - ch_diff2, i + 1, 0] = c1 - ch_diff1
                         self.charge[(c1 - ch_diff1) * d + c2 - ch_diff2, i + 1, 1] = c2 - ch_diff2
                         bonds_updated[(c1 - ch_diff1) * d + c2 - ch_diff2] = 1
-                        #chi_ += 1
-            # self.Lambda[:chi_, i] = 1
-            #pre_chi = chi_
+
             updated_bonds = np.where(bonds_updated == 1)[0]
             self.Lambda[updated_bonds, i] = 1
-            # print('Chi ', chi_)
 
         print('Computing Gamma')
-        # for j in range(pre_chi):
         for j in updated_bonds:
             if self.charge[j, K - 1, 0] == d:
                 c0 = 0
@@ -157,9 +151,7 @@ class FullMPO:
 
         # Sorting bonds based on bond charges
         for i in range(self.n + 1):
-            # print('Sorting')
             idx = np.lexsort((self.charge[i, :, 1], self.charge[i, :, 0]))
-            # print('Indexing')
             self.charge[i] = self.charge[i, idx]
             if i > 0:
                 self.Gamma[i - 1] = self.Gamma[i - 1][:, idx]
@@ -188,7 +180,7 @@ class FullMPO:
             done = False
             while not done:
                 done = self.Check(l)
-                time.sleep(0.1)
+                time.sleep(0.01)
 
         self.UpdateReflectivity()
 
@@ -199,17 +191,21 @@ class FullMPO:
         # print('In master request node ', target_node)
 
         seed = np.random.randint(0, 13579)
+        np.random.seed(seed)
 
         # Determining the location of the two qubit gate
         LC = self.Lambda[l,:]
+        left = "Left"
+        center = "Center"
+        right = "Right"
         if l == 0:
-            location = 'left'
+            location = left
             LR = self.Lambda[l+1,:]
         elif l == self.n - 2:
-            location = 'right'
+            location = right
             LR = self.Lambda_edge[:]
         else:
-            location = 'center'
+            location = center
             LR = self.Lambda[l+1,:]
         
         Glc = self.Gamma[l,:]
@@ -237,7 +233,7 @@ class FullMPO:
 
         # print('Sent info to node ', target_node)
 
-        new_charge = self.d * np.ones([self.chi, 2], dtype='int32')
+        new_charge = np.empty([self.chi, 2], dtype='int32')
         new_Lambda = np.zeros(self.chi, dtype='float32')
         Gamma0Out = np.zeros([self.chi, self.chi], dtype='complex64')
         Gamma1Out = np.zeros([self.chi, self.chi], dtype='complex64')
@@ -317,6 +313,7 @@ class FullMPO:
                     else:
                         T = my_cv.rvs(2 * k + 2, temp2)
                         temp2 += 2
+                    # print(i, k, k-(i+1)//2)
                     self.reflectivity[i, k-(i+1)//2] = np.sqrt(1 - T)
                     l -= 1
                     i += 1
@@ -390,7 +387,7 @@ class FullMPO:
             # self.REPar[:, 0, i] = self.MPORenyiEntropy(alpha_array[i])
         full_start = time.time()
 
-        for k in range(self.n):
+        for k in range(self.n - 1):
             self.LayerUpdate(k)
             start = time.time()
             self.TotalProbPar[k+1] = TotalProbFromMPO(self.n, self.d, self.Gamma, self.Lambda, self.charge)
