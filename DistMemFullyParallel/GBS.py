@@ -38,8 +38,8 @@ def FullComputeCycle(nodes, ranks_per_node, n, m, d, r, loss, init_chi, chi, err
 
     return TotalProbAvg,  EEAvg, REAvg
 
-def NodeDataCycle(nodes, this_node, n, d, chi):
-    process = NodeData(nodes, this_node, n, d, chi)
+def NodeDataCycle(nodes, ranks_per_node, this_node, n, d, chi):
+    process = NodeData(nodes, ranks_per_node, this_node, n, d, chi)
     process.NodeDataLoop()
 
 def NodeComputeCycle(nodes, this_node, ranks_per_node, node_gpu_ranks, n, d, chi):
@@ -111,6 +111,7 @@ for i in range(1):
             loss = round(100*(1 - lossy_ave_photons/ideal_ave_photons))/100
             PS = int((1-loss)*m*sinh(r)**2); d = PS+1; init_chi = d**2
             chi = int(max(32*2**PS, d**2, 128))
+            # chi = 128
 
             if rank == 0:
                 print('m is ',  m, ', d is ', d, ', r is ', r, ', beta is ', beta, ', chi is ', chi)
@@ -123,7 +124,8 @@ for i in range(1):
             if not os.path.isdir(begin_dir) and rank == 0:
                 os.makedirs(begin_dir)
 
-            if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
+            # if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
+            if True:
                 if rank == 0:
                     print('rank {} full compute'.format(rank))
                     Totprob, EE, RE = FullComputeCycle(nodes, ranks_per_node, n, m, d, r, loss, init_chi, chi, errtol, PS)
@@ -145,7 +147,7 @@ for i in range(1):
                 
                 elif rank % ranks_per_node == 0:
                     print('rank {} node data'.format(rank))
-                    NodeDataCycle(nodes, node, n, d, chi)
+                    NodeDataCycle(nodes, ranks_per_node, node, n, d, chi)
 
                 elif rank in node_gpu_ranks:
                     print('rank {} rank compute'.format(rank))
@@ -160,7 +162,7 @@ for i in range(1):
                 if rank == 0:
                     print("Simulation already ran.")
 
-    m += 4
+    # m += 4
 
 
 # if __name__ == "__main__":

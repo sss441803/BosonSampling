@@ -1,6 +1,8 @@
 import time
 
 import cupy as cp
+mempool = cp.get_default_memory_pool()
+
 import numpy as np
 
 from cuda_kernels import Rand_U, update_MPO
@@ -174,3 +176,9 @@ class RankCompute:
         comm.Send([cp.asnumpy(d_V), MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=0)
         comm.Send([cp.asnumpy(d_W), MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=1)
         comm.Send([cp.asnumpy(d_Lambda), MPI.FLOAT], self.node_control_rank, tag=2)
+        # comm.Send([d_V, MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=0)
+        # comm.Send([d_W, MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=1)
+        # comm.Send([cp.asnumpy(d_Lambda), MPI.FLOAT], self.node_control_rank, tag=2)
+
+        del d_V, d_W, d_T, d_C
+        mempool.free_all_blocks()

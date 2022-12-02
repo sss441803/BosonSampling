@@ -1,6 +1,8 @@
 import time
 
 import cupy as cp
+mempool = cp.get_default_memory_pool()
+
 import numpy as np
 
 from mpo_sort import Aligner
@@ -77,10 +79,10 @@ class NodeCompute:
             # print('Not done')
             return False
         else:
-            V, W, Lambda = self.requests_buf[charge_c_0][charge_c_1]
-            # V = cp.array(V)
-            # W = cp.array(W)
-            self.requests_buf[charge_c_0][charge_c_1] = [V, W, Lambda]
+            # V, W, Lambda = self.requests_buf[charge_c_0][charge_c_1]
+            # # V = cp.array(V)
+            # # W = cp.array(W)
+            # self.requests_buf[charge_c_0][charge_c_1] = [V, W, Lambda]
             return True
 
 
@@ -95,8 +97,6 @@ class NodeCompute:
             else:
                 new_all_requests.append(requests_info)
         self.all_requests = new_all_requests
-        if len(self.all_requests) == 0:
-            self.Glc = self.Gcr = None
 
         new_running_charges_and_rank = []
         for charge_c_0, charge_c_1, rank in self.running_charges_and_rank:
@@ -109,6 +109,8 @@ class NodeCompute:
 
 
     def NodeProcess(self):
+
+        start = time.time()
 
         svd_time = 0
         theta_time = 0
@@ -158,7 +160,6 @@ class NodeCompute:
         comm.Recv([self.Glc, MPI.C_FLOAT_COMPLEX], source=data_rank_0, tag=5)
         comm.Recv([self.Gcr, MPI.C_FLOAT_COMPLEX], source=data_rank_1, tag=6)
         
-        start = time.time()
         # print('Compute node: {} got data'.format(self.this_node))#, LC, LR, CL, CC, CR, Glc, Gcr, r, location, seed)
 
         # Creating aligner according to left and right charges. Will be used for algning, de-aligning (compacting), selecting data, etc.
@@ -208,10 +209,6 @@ class NodeCompute:
         smallest_cr_0 = np.min(CR[:, 0])
         smallest_cr_1 = np.min(CR[:, 1])
 
-        before_rank_time = time.time() - start
-
-        start = time.time()
-
         svd_complexity_approx = []
         result_sizes = []
         charges = []
@@ -220,8 +217,8 @@ class NodeCompute:
             for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1):
                 # Determining size of buffer for computed resutls
                 # Bounds for data selection. Given tau (center charge), find the range of possible charges for left, center and right.
-                min_charge_l_0, max_charge_l_0, min_charge_c_0, max_charge_c_0, min_charge_r_0, max_charge_r_0 = self.charge_range(location, charge_c_0)
-                min_charge_l_1, max_charge_l_1, min_charge_c_1, max_charge_c_1, min_charge_r_1, max_charge_r_1 = self.charge_range(location, charge_c_1)
+                min_charge_l_0, max_charge_l_0, _,  _, min_charge_r_0, max_charge_r_0 = self.charge_range(location, charge_c_0)
+                min_charge_l_1, max_charge_l_1, _, _, min_charge_r_1, max_charge_r_1 = self.charge_range(location, charge_c_1)
                 # Selecting data according to charge bounds
                 left_indices = aligner.get_indices(min_charge_l_0, max_charge_l_0, min_charge_l_1, max_charge_l_1, 'left', False)
                 right_indices = aligner.get_indices(min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1, 'right', False)
@@ -235,6 +232,10 @@ class NodeCompute:
                 result_sizes.append([left_size, right_size])
                 svd_complexity_approx.append(- left_size * right_size * min(left_size, right_size))
 
+        before_rank_time = time.time() - start
+
+        start = time.time()
+
         complexity_ordered_charge_ids = np.argsort(svd_complexity_approx) # Indices that sort in descending order. Largest first so that they are first ran
         for charge_id in complexity_ordered_charge_ids:
             left_size, right_size = result_sizes[charge_id]
@@ -247,7 +248,6 @@ class NodeCompute:
             self.Request(charge_c_0, charge_c_1, left_size, right_size, target_rank)
             # print('finished requesting ', target_rank)
             self.running_charges_and_rank.append([charge_c_0, charge_c_1, target_rank])
-
         # print('finished all requests')
 
         while len(self.available_ranks) != self.num_ranks:
@@ -255,12 +255,16 @@ class NodeCompute:
             # print('waiting finish layer')
             time.sleep(0.01)
 
-        rank_time = time.time() - start
+        self.Glc = None
+        self.Gcr = None
+        del self.Glc, self.Gcr
 
         for target_rank in self.available_ranks:
             comm.send('Node Finished', target_rank, tag=101)
             theta_time += comm.recv(source=target_rank, tag=3)
             svd_time += comm.recv(source=target_rank, tag=4)
+
+        rank_time = time.time() - start
 
         start = time.time()
 
@@ -277,7 +281,7 @@ class NodeCompute:
             for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1):
                 if self.requests_buf[charge_c_0][charge_c_1] == None:
                     continue
-                V, W, Lambda = self.requests_buf[charge_c_0][charge_c_1]
+                Lambda = self.requests_buf[charge_c_0][charge_c_1][2]
                 # new_Gamma_L = new_Gamma_L + [V[:, i] for i in range(len(Lambda))]
                 # new_Gamma_R = new_Gamma_R + [W[i, :] for i in range(len(Lambda))]
                 new_Lambda = np.append(new_Lambda, Lambda)
@@ -291,46 +295,7 @@ class NodeCompute:
             idx_select = np.argpartition(new_Lambda, -num_lambda)[-num_lambda:] # Indices of the largest num_lambda singular values
         else:
             idx_select = np.array([], dtype=int_type)
-        
-        # Initialize selected and sorted Gamma outputs
-        Gamma0Out = Aligner.make_data_obj('Glc', False, cp.zeros([self.chi, self.chi], dtype = data_type), [0, 0])
-        Gamma1Out = Aligner.make_data_obj('Gcr', False, cp.zeros([self.chi, self.chi], dtype = data_type), [0, 0])
 
-        # Indices of eigenvalues that mark the beginning of center charge tau
-        cum_tau_array = np.cumsum(tau_array)
-        tau = 0
-        # Need to loop through center charges to select (bonds corresponds to the largest singular values) saved Gammas to output gammas
-        for charge_c_0 in range(smallest_cr_0, largest_cl_0 + 1):
-            for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1):
-                if self.requests_buf[charge_c_0][charge_c_1] == None:
-                    continue
-                V, W, Lambda = self.requests_buf[charge_c_0][charge_c_1]
-                # Selecting gamma that will be modified. Modifying gamma will modify Gamma (because they are pointers).
-                min_charge_l_0, max_charge_l_0, _, _, min_charge_r_0, max_charge_r_0 = self.charge_range(location, charge_c_0)
-                min_charge_l_1, max_charge_l_1, _, _, min_charge_r_1, max_charge_r_1 = self.charge_range(location, charge_c_1)
-                idx_gamma0_0, idx_gamma0_1 = aligner.get_select_index(Gamma0Out, min_charge_l_0, max_charge_l_0, min_charge_l_1, max_charge_l_1, 0, self.d, 0, self.d)
-                idx_gamma1_0, idx_gamma1_1 = aligner.get_select_index(Gamma1Out, 0, self.d, 0, self.d, min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1)
-                # Finding bond indices (tau_idx) that are in the largest num_lambda singular values and for center charge tau.
-                # idx_select[indices] = tau_idx
-                tau_idx, indices, _ = np.intersect1d(idx_select, np.arange(cum_tau_array[tau], cum_tau_array[tau + 1]), return_indices = True)
-                tau += 1 # This line MUST be before the continue statement
-
-                if len(tau_idx) == 0:
-                    continue
-                # Left and right singular vectors that corresponds to the largest num_lambda singular values and center charge tau
-                # V = cp.array([new_Gamma_L[i] for i in tau_idx], dtype = 'complex64')
-                # W = cp.array([new_Gamma_R[i] for i in tau_idx], dtype = 'complex64')
-                V = V[:, tau_idx - tau_idx[0]]
-                # print('V shape: ', V.shape)
-                W = W[tau_idx - tau_idx[0]]
-                # V = V.T
-
-                # Calculating output gamma
-                # Left
-                Gamma0Out.data[idx_gamma0_0.reshape(-1,1), idx_gamma0_1[indices].reshape(1,-1)] = V
-                # Right
-                Gamma1Out.data[idx_gamma1_0[indices].reshape(-1,1), idx_gamma1_1.reshape(1,-1)] = W
-    
         # Select charges that corresponds to the largest num_lambda singular values
         new_charge_0 = new_charge_0[idx_select]
         new_charge_1 = new_charge_1[idx_select]
@@ -341,34 +306,107 @@ class NodeCompute:
         new_charge = self.d * np.ones([self.chi, 2], dtype='int32')
         new_charge[:num_lambda, 0] = new_charge_0
         new_charge[:num_lambda, 1] = new_charge_1
-        
         # Selecting and sorting Lambda
         new_Lambda = new_Lambda[idx_select]
         new_Lambda = new_Lambda[idx_sort]
+        # Sending Lambda and charge
+        comm.Send([new_charge, MPI.INT], data_rank_1, tag=10)
+        comm.Send([new_Lambda, MPI.FLOAT], data_rank_0, tag=11)
+        
+        # Initialize selected and sorted Gamma outputs
+        Gamma0Out = Aligner.make_data_obj('Glc', False, cp.zeros([1, 1], dtype = data_type), [0, 0])
+        Gamma0OutData = cp.zeros([self.chi, self.chi], dtype = 'complex64')
 
+        # Indices of eigenvalues that mark the beginning of center charge tau
+        cum_tau_array = np.cumsum(tau_array)
+        tau = 0
+        info_list = [[None for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1)] for charge_c_0 in range(smallest_cr_0, largest_cl_0 + 1)]
+        # Need to loop through center charges to select (bonds corresponds to the largest singular values) saved Gammas to output gammas
+        for charge_c_0 in range(smallest_cr_0, largest_cl_0 + 1):
+            for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1):
+                if self.requests_buf[charge_c_0][charge_c_1] == None:
+                    continue
+                
+                # Finding bond indices (tau_idx) that are in the largest num_lambda singular values and for center charge tau.
+                # idx_select[indices] = tau_idx
+                tau_idx, indices, _ = np.intersect1d(idx_select, np.arange(cum_tau_array[tau], cum_tau_array[tau + 1]), return_indices = True)
+                tau += 1 # This line MUST be before the continue statement
+                if len(tau_idx) == 0:
+                    continue
+
+                # Selecting gamma that will be modified. Modifying gamma will modify Gamma (because they are pointers).
+                min_charge_l_0, max_charge_l_0, _, _, min_charge_r_0, max_charge_r_0 = self.charge_range(location, charge_c_0)
+                min_charge_l_1, max_charge_l_1, _, _, min_charge_r_1, max_charge_r_1 = self.charge_range(location, charge_c_1)
+                idx_gamma0_0, idx_gamma0_1 = aligner.get_select_index(Gamma0Out, min_charge_l_0, max_charge_l_0, min_charge_l_1, max_charge_l_1, 0, self.d, 0, self.d)
+                info_list[charge_c_0][charge_c_1] = [min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1, tau_idx, indices]
+                
+                # Left and right singular vectors that corresponds to the largest num_lambda singular values and center charge tau
+                # V = cp.array([new_Gamma_L[i] for i in tau_idx], dtype = 'complex64')
+                # W = cp.array([new_Gamma_R[i] for i in tau_idx], dtype = 'complex64')
+                V = self.requests_buf[charge_c_0][charge_c_1][0]
+                V = V[:, tau_idx - tau_idx[0]]
+                # V = V.T
+
+                # Calculating output gamma
+                # Left
+                Gamma0OutData[idx_gamma0_0.reshape(-1,1), idx_gamma0_1[indices].reshape(1,-1)] = V
+                del V
+                self.requests_buf[charge_c_0][charge_c_1][0] = None
+        
+        Gamma0OutData[:, :num_lambda] = Gamma0OutData[:, idx_sort]
+
+        comm.Send([cp.asnumpy(Gamma0OutData), MPI.C_FLOAT_COMPLEX], data_rank_0, tag=12)
+        del Gamma0Out, Gamma0OutData
+        mempool.free_all_blocks()
+
+        # Initialize selected and sorted Gamma outputs
+        Gamma1Out = Aligner.make_data_obj('Gcr', False, cp.zeros([1, 1], dtype = data_type), [0, 0])
+        Gamma1OutData = cp.zeros([self.chi, self.chi], dtype = 'complex64')
+
+        # Indices of eigenvalues that mark the beginning of center charge tau
+        cum_tau_array = np.cumsum(tau_array)
+        tau = 0
+        # Need to loop through center charges to select (bonds corresponds to the largest singular values) saved Gammas to output gammas
+        for charge_c_0 in range(smallest_cr_0, largest_cl_0 + 1):
+            for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1):
+                if self.requests_buf[charge_c_0][charge_c_1] == None:
+                    continue
+                
+                if info_list[charge_c_0][charge_c_1] == None:
+                    continue
+
+                min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1, tau_idx, indices = info_list[charge_c_0][charge_c_1]
+                idx_gamma1_0, idx_gamma1_1 = aligner.get_select_index(Gamma1Out, 0, self.d, 0, self.d, min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1)
+                # Left and right singular vectors that corresponds to the largest num_lambda singular values and center charge tau
+                # V = cp.array([new_Gamma_L[i] for i in tau_idx], dtype = 'complex64')
+                # W = cp.array([new_Gamma_R[i] for i in tau_idx], dtype = 'complex64')
+                # print('V shape: ', V.shape)
+                W = self.requests_buf[charge_c_0][charge_c_1][1]
+                W = W[tau_idx - tau_idx[0]]
+
+                # Calculating output gamma
+                # Right
+                Gamma1OutData[idx_gamma1_0[indices].reshape(-1,1), idx_gamma1_1.reshape(1,-1)] = W
+                del W
+                self.requests_buf[charge_c_0][charge_c_1][1] = None
+    
         # if new_Lambda.shape[0] == 0:
         #     print(0)
         # else:
         #     print(np.max(new_Lambda))
 
         # Sorting Gamma
-        Gamma0Out.data[:, :num_lambda] = Gamma0Out.data[:, idx_sort]
-        Gamma1Out.data[:num_lambda] = Gamma1Out.data[idx_sort]
-
-        Gamma0Out = cp.asnumpy(Gamma0Out.data)
-        Gamma1Out = cp.asnumpy(Gamma1Out.data)
-
-        after_rank_time = time.time() - start
+        Gamma1OutData[:num_lambda] = Gamma1OutData[idx_sort]
 
         # print('Rank {} finished processing. Sending to data rank {}, {}'.format(rank, data_rank_0, data_rank_1))
-        comm.Send([new_charge, MPI.INT], data_rank_1, tag=10)
-        comm.Send([new_Lambda, MPI.FLOAT], data_rank_0, tag=11)
-        comm.Send([Gamma0Out, MPI.C_FLOAT_COMPLEX], data_rank_0, tag=12)
-        comm.Send([Gamma1Out, MPI.C_FLOAT_COMPLEX], data_rank_1, tag=13)
+        comm.Send([cp.asnumpy(Gamma1OutData), MPI.C_FLOAT_COMPLEX], data_rank_1, tag=13)
+        del Gamma1Out, Gamma1OutData
+        mempool.free_all_blocks()
         comm.send(svd_time, 0, tag=14)
         comm.send(theta_time, 0, tag=15)
         comm.send(before_rank_time, 0, tag=16)
         comm.send(rank_time, 0, tag=17)
+        after_rank_time = time.time() - start
         comm.send(after_rank_time, 0, tag=18)
 
         # print('Rank {} sent data'.format(rank))

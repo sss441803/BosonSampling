@@ -8,6 +8,8 @@ from scipy.stats import rv_continuous
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 
+from Canonicalize import Canonicalize
+
 # mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
 
 # np.random.seed(1)
@@ -46,6 +48,7 @@ class FullCompute:
         self.rank_time = 0
         self.after_rank_time = 0
         self.nodes = nodes
+        self.this_node = 0
         self.meta_data_requests = [None for _ in range(self.n - 1)]
         # self.requests = [None for _ in range(self.n - 1)]
         self.requests_buf = [[None, None, None, None] for _ in range(self.n - 1)]
@@ -154,8 +157,8 @@ class FullCompute:
             if i < self.n:
                 Gamma[i] = Gamma[i, idx]
 
-        self.normalization = TotalProbFromMPO(self.n, self.d, Gamma, Lambda, charge)
-        print('Total probability normalization factor: ', self.normalization)
+        print('Canonicalization update')
+        Canonicalize(self.n, self.d, self.init_chi, Gamma, Lambda, charge)
 
         charge_temp = np.copy(charge)
         Lambda_temp = np.copy(Lambda)
@@ -210,13 +213,6 @@ class FullCompute:
         for node in self.available_nodes:
             while not MPI.Request.testall(requests[node])[0]:
                 time.sleep(0.01)
-        # print('Canonicalization update')
-        # for l in range(self.n - 1):
-        #     self.Request(l, 0, 0)
-        #     done = False
-        #     while not done:
-        #         done = self.Check(l)
-        #         time.sleep(0.01)
 
         self.UpdateReflectivity()
 
@@ -415,7 +411,8 @@ class FullCompute:
             # print('waiting finish layer')
             time.sleep(0.01)
         for data_rank in self.data_ranks:
-            comm.isend('Layer finished', data_rank, tag=100)
+            if data_rank != 0:
+                comm.isend('Layer finished', data_rank, tag=100)
         self.update_time += time.time() - start
 
 
@@ -424,17 +421,18 @@ class FullCompute:
         full_start = time.time()
         
         self.MPOInitialization()
-        # self.TotalProbPar[0] = TotalProbFromMPO(self.n, self.d, self.Gammas, self.Lambdas, self.charges)
-        # self.EEPar[:, 0] = self.MPOEntanglementEntropy()
+        self.TotalProbPar[0] = self.TotalProbFromMPO()
+        self.EEPar[:, 0] = self.MPOEntanglementEntropy()
         # alpha_array = [0.5, 0.6, 0.7, 0.8, 0.9]
         # for i in range(5):
             # self.REPar[:, 0, i] = self.MPORenyiEntropy(alpha_array[i])
         for k in range(self.n - 1):
             self.LayerUpdate(k)
             start = time.time()
-            # if k % 10 == 0:
-                # self.TotalProbPar[k+1] = TotalProbFromMPO(self.n, self.d, self.Gammas, self.Lambdas, self.charges)
-            # self.EEPar[:, k+1] = self.MPOEntanglementEntropy()
+            if k % 10 == 9 or k == self.n - 2:
+                self.TotalProbPar[k+1] = self.TotalProbFromMPO()
+                self.EEPar[:, k+1] = self.MPOEntanglementEntropy()
+                # print(self.EEPar[:, k+1])
             self.ee_prob_cal_time += time.time() - start
             # for i in range(5):
                 # self.REPar[:, k + 1, i] = self.MPORenyiEntropy(alpha_array[i])
@@ -452,12 +450,266 @@ class FullCompute:
         return self.TotalProbPar, self.EEPar, self.REPar
     
     
-    def MPOEntanglementEntropy(self):      
+    def Sync(self, send_back: bool):
+        requests = [[] for _ in self.available_nodes]
+        Lambda = []
+        Charge = []
+        # Gamma = []
+
+        for site in range(self.n + 1):
+
+            # print('Host site {}.'.format(site))
+        
+            node = site % self.nodes
+            # print('Full: node {} site {}'.format(node, site))
+
+            if node == 0:
+                '''Stores in the host node when destination node is 0'''
+                # '''Gammas only go to self.n'''
+                # if site < self.n:
+                #     Gamma.append(self.Gammas[site // self.nodes])
+                '''Lambdas only go to self.n - 1'''
+                if site < self.n - 1:
+                    Lambda.append(self.Lambdas[site // self.nodes])
+                '''Charges go to self.n + 1'''
+                Charge.append(self.Charges[site // self.nodes])
+                
+            else:
+                '''Stores in different nodes using MPI if destination node is not 0'''
+                data_rank = self.data_ranks[node]
+                '''Wait until all requests completed'''
+                while not MPI.Request.testall(requests[node])[0]:
+                    time.sleep(0.01)
+                requests[node] = []
+                # '''Gammas only go to self.n'''
+                # if site < self.n:
+                #     Gamma_buf = np.empty([self.chi, self.chi], dtype = 'complex64')
+                #     requests[node].append(comm.Irecv([Gamma_buf, MPI.C_FLOAT_COMPLEX], data_rank, tag=4))
+                #     Gamma.append(Gamma_buf)
+                '''Lambdas only go to self.n - 1'''
+                if site < self.n - 1:
+                    Lambda_buf = np.zeros(self.chi, dtype = 'float32')
+                    requests[node].append(comm.Irecv([Lambda_buf, MPI.FLOAT], data_rank, tag=2))
+                    Lambda.append(Lambda_buf)
+                '''Charges go to self.n + 1'''
+                Charge_buf = self.d * np.ones([self.chi, 2], dtype = 'int32')
+                requests[node].append(comm.Irecv([Charge_buf, MPI.INT], data_rank, tag=3))
+                Charge.append(Charge_buf)
+
+        '''Wait until all requests completed'''
+        for node in self.available_nodes:
+            while not MPI.Request.testall(requests[node])[0]:
+                time.sleep(0.01)
+
+        '''Compile results and send to all data ranks'''
+        Lambda = np.array(Lambda)
+        Charge = np.array(Charge)
+        # Gamma = np.array(Gamma)
+
+        if send_back:
+            requests = []
+            for data_rank in self.data_ranks:
+                if data_rank != 0:
+                    requests.append(comm.Isend(Lambda, data_rank, tag=0))
+                    requests.append(comm.Isend(Charge, data_rank, tag=1))
+                    # requests.append(comm.Isend(Gamma, data_rank, tag=2))
+            
+            '''Wait until all requests completed'''
+            while not MPI.Request.testall(requests)[0]:
+                time.sleep(0.01)
+
+        # if send_back:
+        #     return Lambda, Charge, Gamma
+
+        # else:
+        #     return Lambda, Charge
+        return Lambda, Charge
+
+    def MPOEntanglementEntropy(self):
+
+        for data_rank in self.data_ranks:
+            if data_rank != 0:
+                comm.send('Compute EE', data_rank, tag=100)
+
+        Lambda, _ = self.Sync(send_back=False)
         Output = np.zeros([self.n - 1])
-        sq_lambda = np.copy(self.Lambda ** 2)
+        sq_lambda = np.copy(Lambda ** 2)
         for i in range(self.n - 1):
             Output[i] += EntropyFromColumn(ColumnSumToOne(sq_lambda[i]))
         return Output
+
+    def TotalProbFromMPO(self):
+        '''Computing the total probability (see if it is conserved) from distributed Gamma, Lambda and charges.
+        This uses a log-depth reduction approach. Probability computation is a chain matrix multiplication of Gammas,
+        where indices of Gammas are selected based on Charge and Lambda.
+        At each level, Gammas at all sites are sent to the first half of the sites,
+        where pair-wise matrix multiplication reduces the number of gammas by half.
+        This progresses to the next level until all gammas are reduced to a number.'''
+
+        # Telling all data ranks to send information needed for probability computation
+        for data_rank in self.data_ranks:
+            if data_rank != 0:
+                comm.send('Compute Prob', data_rank, tag=100)
+
+        # Obtaining Lambda and Charge from all data ranks.
+        # These arrays are small so it's okay to synchronize (no need for distributed storage)
+        Lambda, Charge = self.Sync(send_back=True) # send_back=True means all data ranks will have synchronized Lambda and Charge as well
+        length = self.n
+        GammaResults = self.Gammas
+
+        # Selecting indices of gammas based on charge and lambda happens only at the first level, so first round of reduction is special
+        first_round = True
+
+        while length != 1: # length is the remaining number of unreduced gammas
+
+            # Receiving size info (sizes of gammas after index selection)
+            size_req_list = [[] for _ in range(length)]
+            for site in range((length - 1) // 2 + 1): # Only the first half will receive data and therefore receive size info
+                # Skip this site if this data node is not in charge of this site
+                if self.this_node != site % self.nodes:
+                    continue
+                # Receiving size of first gamma
+                size_req_list[site].append(comm.irecv(source = self.data_ranks[(2 * site) % self.nodes], tag = 2 * site))
+                # Receive size of second gamma only if there is a second gamma needed
+                # not needed for the last site when there are a odd number of sites
+                if not (site == (length - 1) // 2 and length % 2 == 1):
+                    size_req_list[site].append(comm.irecv(source = self.data_ranks[(2 * site + 1) % self.nodes], tag = 2 * site + 1))
+            
+            # Sending size info
+            idx_list = [None for _ in range(length)]
+            for site in range(length):
+                if self.this_node != site % self.nodes:
+                    continue
+                target_site = site // 2 # Destination site sending gamma to
+                if first_round:
+                    # Selecting indices based on charge and lambda at the first level only
+                    lambda_select = np.where(Lambda[site - 1] > 0)[0] if site != 0 else np.arange(self.chi)
+                    charge_select = np.where(Charge[site, :, 0] == Charge[site, :, 1])[0]
+                    idx1 = np.intersect1d(charge_select, lambda_select)
+                    lambda_select = np.where(Lambda[site] > 0)[0] if site != self.n - 1 else np.arange(self.chi)
+                    charge_select = np.where(Charge[site + 1, :, 0] == Charge[site + 1, :, 1])[0]
+                    idx2 = np.intersect1d(charge_select, lambda_select)
+                    idx_list[site] = [idx1, idx2]
+                    comm.send([idx1.shape[0], idx2.shape[0]], self.data_ranks[target_site % self.nodes], tag = site)
+                else:
+                    # Otherwise, simply send the shape of gamma
+                    comm.send(GammaResults[site // self.nodes].shape, self.data_ranks[target_site % self.nodes], tag = site)
+
+            # Receiving Gammas
+            req = []
+            gamma1s = []
+            gamma2s = []
+            size_list = []
+            for site in range((length - 1) // 2 + 1):
+                self.nodes
+                if self.this_node != site % self.nodes:
+                    continue
+                # Only continue if size information arrived
+                completed = MPI.Request.testall(size_req_list[site])
+                while not completed[0]:
+                    time.sleep(0.01)
+                    completed = MPI.Request.testall(size_req_list[site])
+                sizes = completed[1]
+                size_list.append(sizes)
+                size0, size1 = sizes[0]
+                # Receiving gammas (reshaped to 1 dimension so that arrays don't get unexpectedly transposed)
+                gamma1 = np.empty(size0 * size1, dtype = 'complex64')
+                req.append(comm.Irecv([gamma1, MPI.C_FLOAT_COMPLEX], source = self.data_ranks[(2 * site) % self.nodes], tag = 2 * site))
+                if site == (length - 1) // 2 and length % 2 == 1:
+                    # set gamma2 to identity if second gamma is not needed for being the last gamma for odd lengths
+                    gamma2 = np.identity(size1, dtype = 'complex64').reshape(-1)
+                else:
+                    size2, size3 = sizes[1]
+                    gamma2 = np.empty(size2 * size3, dtype = 'complex64')
+                    req.append(comm.Irecv([gamma2, MPI.C_FLOAT_COMPLEX], source = self.data_ranks[(2 * site + 1) % self.nodes], tag = 2 * site + 1))
+                gamma1s.append(gamma1)
+                gamma2s.append(gamma2)
+
+            send_requests = []
+            # Sending Gammas
+            for site in range(length):
+                if self.this_node != site % self.nodes:
+                    continue
+                target_site = site // 2
+                gamma = GammaResults[site // self.nodes]
+                if first_round:
+                    idx1, idx2 = idx_list[site]
+                    gamma = gamma[idx1][:, idx2]
+                gamma = gamma.reshape(-1)
+                # print('host gamma: ', gamma)
+                send_requests.append(comm.Isend([gamma, MPI.C_FLOAT_COMPLEX], self.data_ranks[target_site % self.nodes], tag = site))
+
+            GammaResults = [None for _ in range(len(gamma1s))]
+
+            # Computing
+            MPI.Request.waitall(req) # Continue only all gammas are received
+            for i in range(len(gamma1s)):
+                # Retrieve the sizes of gammas to reshape from 1d to 2d
+                sizes = size_list[i]
+                size0, size1 = sizes[0]
+                if len(sizes) == 1: # Case where the second gamma is not needed
+                    size2 = size3 = size1
+                else:
+                    size2, size3 = sizes[1]
+                gamma1, gamma2 = gamma1s[i].reshape(size0, size1), gamma2s[i].reshape(size2, size3)
+                # if first_round:
+                #     site = 2 * (i * self.nodes + self.this_node)
+                #     lambda_select = np.where(Lambda[site - 1] > 0)[0] if site != 0 else np.arange(self.chi)
+                #     charge_select = np.where(Charge[site, :, 0] == Charge[site, :, 1])[0]
+                #     idx1 = np.intersect1d(charge_select, lambda_select)
+                #     lambda_select = np.where(Lambda[site] > 0)[0] if site != self.n - 1 else np.arange(self.chi)
+                #     charge_select = np.where(Charge[site + 1, :, 0] == Charge[site + 1, :, 1])[0]
+                #     idx2 = np.intersect1d(charge_select, lambda_select)
+                #     if not np.allclose(gamma1, Gamma[site, idx1][:, idx2]):
+                #         print(gamma1, Gamma[site, idx1][:, idx2])
+                #     if site < self.n - 1:
+                #         lambda_select = np.where(Lambda[site + 1] > 0)[0] if site + 1 != self.n - 1 else np.arange(self.chi)
+                #         charge_select = np.where(Charge[site + 2, :, 0] == Charge[site + 2, :, 1])[0]
+                #         idx3 = np.intersect1d(charge_select, lambda_select)
+                #         if not np.allclose(gamma2, Gamma[site + 1, idx2][:, idx3]):
+                #             print(gamma2, Gamma[site + 1, idx2][:, idx3])
+                    # print(gamma1.shape, idx1.shape, idx2.shape)
+                    
+                # print('mat ', gamma1, gamma2)
+                # print('mat shape: ', gamma1.shape, gamma2.shape)
+                gamma1 = np.matmul(gamma1, gamma2)
+                GammaResults[i] = gamma1
+
+            # Next iteration should have roughly half the length
+            length = (length - 1) // 2 + 1
+            # Next iteration is not the first round anymore
+            first_round = False
+            MPI.Request.waitall(send_requests)
+
+        prob = np.sum(GammaResults[0])
+        print('Probability: ', prob)
+        # return prob
+
+        # # Gamma = np.array(self.Gammas)
+        # R = Gamma[self.n - 1, :, 0]
+        # pre_idx = np.array([0])
+        # RTemp = np.copy(R)
+        # for k in range(self.n - 2):
+        #     idx = np.array([], dtype = 'int32')
+        #     for ch in range(self.d):
+        #         idx = np.append(idx, np.intersect1d(np.nonzero(Charge[self.n - 1 - k, :, 0] == ch), np.intersect1d(np.nonzero(Charge[self.n - 1 - k, :, 1] == ch), np.nonzero(Lambda[self.n - 1 - k - 1] > 0))))
+        #     R = np.matmul(Gamma[self.n - 1 - k - 1, :, idx].T, RTemp[idx].reshape(-1))
+        #     # print('baseline mat ', Gamma[self.n - 1 - k, idx][:, pre_idx])
+        #     pre_idx = idx
+        #     # print('Baseline idx shape: ', idx.shape[0], R.shape)
+        #     RTemp = np.copy(R)
+        # idx = np.array([], dtype = 'int32')
+        # for ch in range(self.d):
+        #     idx = np.append(idx, np.intersect1d(np.nonzero(Charge[1, :, 0] == ch), np.intersect1d(np.nonzero(Charge[1, :, 1] == ch), np.nonzero(Lambda[0, :] > 0))))
+        # res = np.matmul(Gamma[0, :, idx].T, RTemp[idx].reshape(-1))
+        # # print('Baseline idx shape: ', idx.shape[0], res.shape)
+        # tot_prob = np.sum(res)
+        # print('Probability: ', np.real(tot_prob))
+        # # if self.normalization != None:
+        # #     if tot_prob/self.normalization > 1.05 or tot_prob/self.normalization < 0.95:
+        # #         quit()
+        return prob
+        
 
     def MPORenyiEntropy(self, alpha = 0.5):
         Output = np.zeros([self.n - 1])
@@ -492,26 +744,6 @@ class my_pdf(rv_continuous):
     def _pdf(self, x, k, idx):
         return (k - idx) * (1 - x) ** (k - idx - 1)
 my_cv = my_pdf(a = 0, b = 1, name='my_pdf')
-
-def TotalProbFromMPO(n, d, Gamma, Lambda, charge):
-    R = Gamma[n - 1, :, 0]
-    RTemp = np.copy(R)
-    for k in range(n - 2):
-        idx = np.array([], dtype = 'int32')
-        for ch in range(d):
-            idx = np.append(idx, np.intersect1d(np.nonzero(charge[n - 1 - k, :, 0] == ch), np.intersect1d(np.nonzero(charge[n - 1 - k, :, 1] == ch), np.nonzero(Lambda[n - 1 - k - 1] > 0))))
-        R = np.matmul(Gamma[n - 1 - k - 1, :, idx].T, RTemp[idx].reshape(-1))
-        RTemp = np.copy(R)
-    idx = np.array([], dtype = 'int32')
-    for ch in range(d):
-        idx = np.append(idx, np.intersect1d(np.nonzero(charge[1, :, 0] == ch), np.intersect1d(np.nonzero(charge[1, :, 1] == ch), np.nonzero(Lambda[0, :] > 0))))
-    res = np.matmul(Gamma[0, :, idx].T, RTemp[idx].reshape(-1))
-    tot_prob = np.sum(res)
-    print('Probability: ', np.real(tot_prob))
-    # if self.normalization != None:
-    #     if tot_prob/self.normalization > 1.05 or tot_prob/self.normalization < 0.95:
-    #         quit()
-    return tot_prob
 
 def EntropyFromColumn(InputColumn):
     Output = -np.nansum(InputColumn * np.log2(InputColumn))
