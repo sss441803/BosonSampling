@@ -12,7 +12,6 @@ from Canonicalize import Canonicalize
 
 # mempool.set_limit(size=2.5 * 10**9)  # 2.3 GiB
 
-# np.random.seed(1)
 np.set_printoptions(precision=3)
 
 data_type = np.complex64
@@ -32,11 +31,12 @@ class FullCompute:
         self.init_chi = init_chi
         self.chi = chi
         self.errtol = errtol
-        self.TotalProbPar = np.zeros([n], dtype = 'float32')
-        self.SingleProbPar = np.zeros([n], dtype = 'float32')
-        self.EEPar = np.zeros([n - 1, n], dtype = 'float32')      
-        self.REPar = np.zeros([n - 1, n, 5], dtype = 'float32')
+        self.TotalProbPar = np.zeros([n + 1], dtype = 'float32')
+        self.SingleProbPar = np.zeros([n + 1], dtype = 'float32')
+        self.EEPar = np.zeros([n - 1, n + 1], dtype = 'float32')      
+        self.REPar = np.zeros([n - 1, n + 1, 5], dtype = 'float32')
         self.reflectivity = np.empty([self.n, self.n // 2])
+        self.seeds = np.empty([self.n, self.n // 2], dtype=int)
         self.PS = PS
         self.normalization = None
         self.update_time = 0
@@ -214,17 +214,15 @@ class FullCompute:
             while not MPI.Request.testall(requests[node])[0]:
                 time.sleep(0.01)
 
-        self.UpdateReflectivity()
+        self.PrepareReflectivityAndSeeds()
+        print(self.seeds)
 
 
     #MPO update after a two-qudit gate        
-    def Request(self, l, r, compute_node):
+    def Request(self, seed, l, r, compute_node):
 
+        # print(seed)
         # print('In master request node ', target_node)
-
-        seed = np.random.randint(0, 13579)
-        np.random.seed(seed)
-
         compute_rank = self.compute_ranks[compute_node]
 
         # Telling compute node to expect compute load and relevant compute parameters except data
@@ -343,8 +341,8 @@ class FullCompute:
         return True
 
 
-    def UpdateReflectivity(self):
-        
+    def PrepareReflectivityAndSeeds(self):
+        np.random.seed(2)
         for k in range(self.n - 1):
             # print('k, ', k)
             if k < self.n / 2:
@@ -361,6 +359,8 @@ class FullCompute:
                         temp2 += 2
                     # print(i, k, k-(i+1)//2)
                     self.reflectivity[i, k-(i+1)//2] = np.sqrt(1 - T)
+                    self.seeds[i, k-(i+1)//2] = np.random.randint(0, 13579)
+                    # print('seed: ', self.seeds[i, k-(i+1)//2])
                     l -= 1
                     i += 1
             else:
@@ -376,6 +376,8 @@ class FullCompute:
                         T = my_cv.rvs(2 * self.n - (2 * k + 1), temp2)
                         temp2 += 2
                     self.reflectivity[first_layer + i, self.n//2-1-(i+1)//2] = np.sqrt(1 - T)
+                    self.seeds[first_layer + i, self.n//2-1-(i+1)//2] = np.random.randint(0, 13579)
+                    # print('seed: ', self.seeds[first_layer + i, self.n//2-1-(i+1)//2])
                     l -= 1    
 
 
@@ -396,6 +398,7 @@ class FullCompute:
             if l >= self.m + k:
                 continue
             reflectivity = self.reflectivity[k, i]
+            seed = self.seeds[k, i]
             # print('finished reflectivity')
             # print(self.available_nodes)
             while len(self.available_nodes) == 0:
@@ -403,7 +406,7 @@ class FullCompute:
                 self.update_node_status()
                 time.sleep(0.01)
             target_node = self.available_nodes.pop(0)
-            self.Request(l, reflectivity, target_node)
+            self.Request(seed, l, reflectivity, target_node)
             # print('finished request')
             self.running_l_and_node.append([l, target_node])
         while len(self.available_nodes) != self.num_nodes:
@@ -426,12 +429,12 @@ class FullCompute:
         # alpha_array = [0.5, 0.6, 0.7, 0.8, 0.9]
         # for i in range(5):
             # self.REPar[:, 0, i] = self.MPORenyiEntropy(alpha_array[i])
-        for k in range(self.n - 1):
+        for k in range(self.n):
             self.LayerUpdate(k)
             start = time.time()
-            if k % 10 == 9 or k == self.n - 2:
+            if k % 10 == 9 or k == self.n - 1:
                 self.TotalProbPar[k+1] = self.TotalProbFromMPO()
-                self.EEPar[:, k+1] = self.MPOEntanglementEntropy()
+            self.EEPar[:, k+1] = self.MPOEntanglementEntropy()
                 # print(self.EEPar[:, k+1])
             self.ee_prob_cal_time += time.time() - start
             # for i in range(5):
@@ -681,7 +684,7 @@ class FullCompute:
             first_round = False
             MPI.Request.waitall(send_requests)
 
-        prob = np.sum(GammaResults[0])
+        prob = np.sum(np.real(GammaResults[0]))
         print('Probability: ', prob)
         # return prob
 

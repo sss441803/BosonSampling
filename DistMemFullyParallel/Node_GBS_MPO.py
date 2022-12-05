@@ -60,8 +60,8 @@ class NodeCompute:
 
         # Receiving results (non-blocking)
         num_eig = min(left_size, right_size)
-        V = cp.empty([left_size, num_eig], dtype='complex64')
-        W = cp.empty([num_eig, right_size], dtype='complex64')
+        V = np.empty(left_size * num_eig, dtype='complex64')
+        W = np.empty(num_eig * right_size, dtype='complex64')
         Lambda = np.empty(num_eig, dtype='float32')
         requests = []
         requests.append(comm.Irecv([V, MPI.C_FLOAT_COMPLEX], source=target_rank, tag=0))
@@ -236,6 +236,7 @@ class NodeCompute:
 
         start = time.time()
 
+        sizes = [[None for _ in range(self.d)] for _ in range(self.d)]
         complexity_ordered_charge_ids = np.argsort(svd_complexity_approx) # Indices that sort in descending order. Largest first so that they are first ran
         for charge_id in complexity_ordered_charge_ids:
             left_size, right_size = result_sizes[charge_id]
@@ -246,6 +247,7 @@ class NodeCompute:
                 time.sleep(0.01)
             target_rank = self.available_ranks.pop(0)
             self.Request(charge_c_0, charge_c_1, left_size, right_size, target_rank)
+            sizes[charge_c_0][charge_c_1] = [left_size, right_size]
             # print('finished requesting ', target_rank)
             self.running_charges_and_rank.append([charge_c_0, charge_c_1, target_rank])
         # print('finished all requests')
@@ -320,7 +322,7 @@ class NodeCompute:
         # Indices of eigenvalues that mark the beginning of center charge tau
         cum_tau_array = np.cumsum(tau_array)
         tau = 0
-        info_list = [[None for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1)] for charge_c_0 in range(smallest_cr_0, largest_cl_0 + 1)]
+        info_list = [[None for _ in range(self.d)] for _ in range(self.d)]
         # Need to loop through center charges to select (bonds corresponds to the largest singular values) saved Gammas to output gammas
         for charge_c_0 in range(smallest_cr_0, largest_cl_0 + 1):
             for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1):
@@ -343,7 +345,9 @@ class NodeCompute:
                 # Left and right singular vectors that corresponds to the largest num_lambda singular values and center charge tau
                 # V = cp.array([new_Gamma_L[i] for i in tau_idx], dtype = 'complex64')
                 # W = cp.array([new_Gamma_R[i] for i in tau_idx], dtype = 'complex64')
-                V = self.requests_buf[charge_c_0][charge_c_1][0]
+                left_size, right_size = sizes[charge_c_0][charge_c_1]
+                num_eig = min(left_size, right_size)
+                V = cp.array(self.requests_buf[charge_c_0][charge_c_1][0]).reshape(left_size, num_eig)
                 V = V[:, tau_idx - tau_idx[0]]
                 # V = V.T
 
@@ -381,7 +385,9 @@ class NodeCompute:
                 # V = cp.array([new_Gamma_L[i] for i in tau_idx], dtype = 'complex64')
                 # W = cp.array([new_Gamma_R[i] for i in tau_idx], dtype = 'complex64')
                 # print('V shape: ', V.shape)
-                W = self.requests_buf[charge_c_0][charge_c_1][1]
+                left_size, right_size = sizes[charge_c_0][charge_c_1]
+                num_eig = min(left_size, right_size)
+                W = cp.array(self.requests_buf[charge_c_0][charge_c_1][1]).reshape(num_eig, right_size)
                 W = W[tau_idx - tau_idx[0]]
 
                 # Calculating output gamma

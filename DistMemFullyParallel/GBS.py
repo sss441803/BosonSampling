@@ -3,7 +3,7 @@ import argparse
 import os
 import time
 from math import sinh, sqrt
-# import sys
+import sys
 
 import cupy as cp
 import numpy as np
@@ -18,13 +18,13 @@ from mpi4py import MPI
 
 
 def FullComputeCycle(nodes, ranks_per_node, n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
-    TotalProbAvg = np.zeros([n])
-    EEAvg = np.zeros([n - 1, n])
-    REAvg = np.zeros([n - 1, n, 5])
+    TotalProbAvg = np.zeros([n + 1])
+    EEAvg = np.zeros([n - 1, n + 1])
+    REAvg = np.zeros([n - 1, n + 1, 5])
 
-    TotalProbTot = np.zeros([n])
-    EETot = np.zeros([n - 1, n])
-    RETot = np.zeros([n - 1, n, 5])
+    TotalProbTot = np.zeros([n + 1])
+    EETot = np.zeros([n - 1, n + 1])
+    RETot = np.zeros([n - 1, n + 1, 5])
 
     boson = FullCompute(nodes, ranks_per_node, n, m, d, r, loss, init_chi, chi, errtol, PS)
     Totprob, EE, RE = boson.FullUpdate()
@@ -66,8 +66,6 @@ def PS_dist(n, r, loss):
     return prob_dist
 
 
-# def main():
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--nodes', type=int, default=0)
 parser.add_argument('--ranks_per_node', type=int, default=0)
@@ -99,76 +97,79 @@ if rank in node_gpu_ranks:
     cp.cuda.Device(gpu).use()
     print('rank {} using gpu {}'.format(rank, gpu))
 
-t0 = time.time()
 
-errtol = 10 ** (-7)
+def main():
 
-for i in range(1):
-    for beta in [1]:
-        for r in [1.44]:
-            ideal_ave_photons = m*sinh(r)**2
-            lossy_ave_photons = beta*sqrt(ideal_ave_photons)
-            loss = round(100*(1 - lossy_ave_photons/ideal_ave_photons))/100
-            PS = int((1-loss)*m*sinh(r)**2); d = PS+1; init_chi = d**2
-            chi = int(max(32*2**PS, d**2, 128))
-            # chi = 128
+    t0 = time.time()
 
-            if rank == 0:
-                print('m is ',  m, ', d is ', d, ', r is ', r, ', beta is ', beta, ', chi is ', chi)
-            if chi > 20000:
+    errtol = 10 ** (-7)
+
+    for i in range(1):
+        for beta in [1]:
+            for r in [1.44]:
+                ideal_ave_photons = m*sinh(r)**2
+                lossy_ave_photons = beta*sqrt(ideal_ave_photons)
+                loss = round(100*(1 - lossy_ave_photons/ideal_ave_photons))/100
+                PS = int((1-loss)*m*sinh(r)**2); d = PS+1; init_chi = d**2
+                chi = int(max(32*2**PS, d**2, 128))
+                # chi = 128
+
                 if rank == 0:
-                    print('Too large')
-                continue
-            
-            begin_dir = './EE_vs_modes/n_{}_m_{}_beta_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, beta, loss, chi, r, PS)
-            if not os.path.isdir(begin_dir) and rank == 0:
-                os.makedirs(begin_dir)
-
-            # if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
-            if True:
-                if rank == 0:
-                    print('rank {} full compute'.format(rank))
-                    Totprob, EE, RE = FullComputeCycle(nodes, ranks_per_node, n, m, d, r, loss, init_chi, chi, errtol, PS)
-                    print(Totprob)
-                    print(EE)
-                    np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
-                    np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
-                    print("Time cost", time.time() - t0)
-
-                    # time_stamps = [[] for _ in node_gpu_ranks]
-                    # for rank in node_gpu_ranks:
-                    #     start_timestamps, end_timestamps = comm.recv(source=rank, tag=102)
-                    #     time_stamps[rank - (node + 1) * 2] = [start_timestamps, end_timestamps]
-                    # print(time_stamps)
-
-                elif rank == node_control_rank:
-                    print('rank {} node compute'.format(rank))
-                    NodeComputeCycle(nodes, node, ranks_per_node, node_gpu_ranks, n, d, chi)
+                    print('m is ',  m, ', d is ', d, ', r is ', r, ', beta is ', beta, ', chi is ', chi)
+                if chi > 20000:
+                    if rank == 0:
+                        print('Too large')
+                    continue
                 
-                elif rank % ranks_per_node == 0:
-                    print('rank {} node data'.format(rank))
-                    NodeDataCycle(nodes, ranks_per_node, node, n, d, chi)
+                begin_dir = './EE_vs_modes/n_{}_m_{}_beta_{}_loss_{}_chi_{}_r_{}_PS_{}'.format(n, m, beta, loss, chi, r, PS)
+                if not os.path.isdir(begin_dir) and rank == 0:
+                    os.makedirs(begin_dir)
 
-                elif rank in node_gpu_ranks:
-                    print('rank {} rank compute'.format(rank))
-                    start_timestamps, end_timestamps = RankComputeCycle(node_control_rank, d, chi)
-                    # comm.send([start_timestamps, end_timestamps], 0, tag=102)
+                if not os.path.isfile(begin_dir + '/EE_{}.npy'.format(id)):
+                # if True:
+                    if rank == 0:
+                        print('rank {} full compute'.format(rank))
+                        Totprob, EE, RE = FullComputeCycle(nodes, ranks_per_node, n, m, d, r, loss, init_chi, chi, errtol, PS)
+                        print(Totprob)
+                        print(EE)
+                        np.save(begin_dir + '/EE_{}.npy'.format(id), EE)
+                        np.save(begin_dir + '/Totprob_{}.npy'.format(id), Totprob)
+                        print("Time cost", time.time() - t0)
+
+                        # time_stamps = [[] for _ in node_gpu_ranks]
+                        # for rank in node_gpu_ranks:
+                        #     start_timestamps, end_timestamps = comm.recv(source=rank, tag=102)
+                        #     time_stamps[rank - (node + 1) * 2] = [start_timestamps, end_timestamps]
+                        # print(time_stamps)
+
+                    elif rank == node_control_rank:
+                        print('rank {} node compute'.format(rank))
+                        NodeComputeCycle(nodes, node, ranks_per_node, node_gpu_ranks, n, d, chi)
+                    
+                    elif rank % ranks_per_node == 0:
+                        print('rank {} node data'.format(rank))
+                        NodeDataCycle(nodes, ranks_per_node, node, n, d, chi)
+
+                    elif rank in node_gpu_ranks:
+                        print('rank {} rank compute'.format(rank))
+                        start_timestamps, end_timestamps = RankComputeCycle(node_control_rank, d, chi)
+                        # comm.send([start_timestamps, end_timestamps], 0, tag=102)
+
+                    else:
+                        print('invalid rank ', rank)
+                        quit()
 
                 else:
-                    print('invalid rank ', rank)
-                    quit()
-
-            else:
-                if rank == 0:
-                    print("Simulation already ran.")
+                    if rank == 0:
+                        print("Simulation already ran.")
 
     # m += 4
 
 
-# if __name__ == "__main__":
-#     # def mpiabort_excepthook(type, value, traceback):
-#     #     comm.Abort()
-#     #     sys.__excepthook__(type, value, traceback)
-#     # # sys.excepthook = mpiabort_excepthook
-#     main()
-#     # sys.excepthook = sys.__excepthook__
+if __name__ == "__main__":
+    # def mpiabort_excepthook(type, value, traceback):
+    #     comm.Abort()
+    #     sys.__excepthook__(type, value, traceback)
+    # sys.excepthook = mpiabort_excepthook
+    main()
+    sys.excepthook = sys.__excepthook__

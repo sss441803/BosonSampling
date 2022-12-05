@@ -1,5 +1,6 @@
 import numpy as np
 import cupy as cp
+mempool = cp.get_default_memory_pool()
 
 from mpo_sort import Aligner
 from cuda_kernels import Rand_U, update_MPO
@@ -120,8 +121,10 @@ def MPOtwoqubitUpdate(n, d, chi, l, Gamma, Lambda, charge):
         idx_select = np.array([], dtype='int32')
     
     # Initialize selected and sorted Gamma outputs
-    d_Gamma0Out = Aligner.make_data_obj('Glc', False, cp.zeros([chi, chi], dtype = 'complex64'), [0, 0])
-    d_Gamma1Out = Aligner.make_data_obj('Gcr', False, cp.zeros([chi, chi], dtype = 'complex64'), [0, 0])
+    d_Gamma0Out = Aligner.make_data_obj('Glc', False, cp.zeros([1, 1], dtype = 'complex64'), [0, 0])
+    d_Gamma0OutData = cp.zeros([chi, chi])
+    d_Gamma1Out = Aligner.make_data_obj('Gcr', False, cp.zeros([1, 1], dtype = 'complex64'), [0, 0])
+    d_Gamma1OutData = cp.zeros([chi, chi])
 
     # Indices of eigenvalues that mark the beginning of center charge tau
     cum_tau_array = np.cumsum(tau_array)
@@ -149,9 +152,9 @@ def MPOtwoqubitUpdate(n, d, chi, l, Gamma, Lambda, charge):
             
             # Calculating output gamma
             # Left
-            d_Gamma0Out.data[idx_gamma0_0.reshape(-1,1), idx_gamma0_1[indices].reshape(1,-1)] = d_V
+            d_Gamma0OutData[idx_gamma0_0.reshape(-1,1), idx_gamma0_1[indices].reshape(1,-1)] = d_V
             # Right
-            d_Gamma1Out.data[idx_gamma1_0[indices].reshape(-1,1), idx_gamma1_1.reshape(1,-1)] = d_W
+            d_Gamma1OutData[idx_gamma1_0[indices].reshape(-1,1), idx_gamma1_1.reshape(1,-1)] = d_W
             
     # Select charges that corresponds to the largest num_lambda singular values
     new_charge_0 = new_charge_0[idx_select]
@@ -173,16 +176,18 @@ def MPOtwoqubitUpdate(n, d, chi, l, Gamma, Lambda, charge):
     LC[num_lambda:] = 0
 
     # Sorting Gamma
-    d_Gamma0Out.data[:, :num_lambda] = d_Gamma0Out.data[:, idx_sort]
-    d_Gamma1Out.data[:num_lambda] = d_Gamma1Out.data[idx_sort]
+    d_Gamma0OutData[:, :num_lambda] = d_Gamma0OutData[:, idx_sort]
+    d_Gamma1OutData[:num_lambda] = d_Gamma1OutData[idx_sort]
 
     if location == right:
-        Gamma[n - 2, :, :min(chi, d ** 2)] = cp.asnumpy(d_Gamma0Out.data[:, :min(chi, d ** 2)])
-        Gamma[n - 1, :min(chi, d ** 2), 0] = cp.asnumpy(d_Gamma1Out.data[:min(chi, d ** 2), 0])
+        Gamma[n - 2, :, :min(chi, d ** 2)] = cp.asnumpy(d_Gamma0OutData[:, :min(chi, d ** 2)])
+        Gamma[n - 1, :min(chi, d ** 2), 0] = cp.asnumpy(d_Gamma1OutData[:min(chi, d ** 2), 0])
     else:
-        Gamma[l, :, :] = cp.asnumpy(d_Gamma0Out.data)
-        Gamma[l + 1, :, :] = cp.asnumpy(d_Gamma1Out.data)
-
+        Gamma[l, :, :] = cp.asnumpy(d_Gamma0OutData)
+        Gamma[l + 1, :, :] = cp.asnumpy(d_Gamma1OutData)
+    
+    del d_Gamma0Out, d_Gamma1Out, d_Gamma0OutData, d_Gamma1OutData
+    mempool.free_all_blocks()
 
 # Gives the range of left, center and right hand side charge values when center charge is fixed to tau
 def charge_range(d, location, tau):

@@ -13,10 +13,11 @@ import time
 def change_idx(x, d):
     return d * x[:, 0] + x[:, 1];
 
-def Rand_BS_MPS(d, r):
+def Rand_BS_MPS(seed, d, r):
+    random = np.random.RandomState(seed)
     #t = 1 / np.sqrt(2); r = 1 / np.sqrt(2);
-    t = np.sqrt(1 - r ** 2) * np.exp(1j * np.random.rand() * 2 * np.pi);
-    r = r * np.exp(1j * np.random.rand() * 2 * np.pi);
+    t = np.sqrt(1 - r ** 2) * np.exp(1j * random.rand() * 2 * np.pi);
+    r = r * np.exp(1j * random.rand() * 2 * np.pi);
     ct = np.conj(t); cr = np.conj(r);
     bs_coeff = lambda n, m, k, l: np.sqrt(factorial(l) * factorial(n + m - l) / factorial(n) / factorial(m)) * comb(n, k) * comb(m, l - k) * (t ** k) * (ct ** (m - l + k)) * (r ** (n - k)) * ((-cr) ** (l - k))
     BS = np.zeros([d, d, d, d], dtype = 'complex64');
@@ -632,14 +633,15 @@ class MPO:
         self.A[:, :, l] = Gamma1Out; self.A[:, :, l + 1] = Gamma2Out;
 
     def MPOtwoqubitUpdate(self, l, r):
-        seed = np.random.randint(0, 13579)
-        #print(seed)
+        seed = 0
+        if r != 0:
+            seed = np.random.randint(0, 13579)
+            print('seed: ', seed)
         self.MPOtwoqubitCombined(l, r, seed)
             
     def MPOtwoqubitCombined(self, l, r, seed):
-        np.random.seed(seed)
         start = time.time()
-        UnitaryMPS = Rand_BS_MPS(self.d, r)
+        UnitaryMPS = Rand_BS_MPS(seed, self.d, r)
         self.U_time += time.time() - start
         if l == 0:
             self.MPOtwoqubitUpdateLeft(UnitaryMPS);
@@ -806,9 +808,9 @@ def RCS1DMultiCycleAvg(NumSample, n, m, d, r, loss, chi, errtol = 10 ** (-6), PS
 np.random.seed(1)
 if __name__ == "__main__":
     t0 = time.time() 
-    np.random.seed(1)
-    NumSample = 1; n = 10; m = 4; loss = 0.5; chi = 2000; r = 0.2; d = 5; errtol = 10 ** (-7);
-    PS = 4;
+    np.random.seed(2)
+    NumSample = 1; n = 6; m = 2; loss = 0.65; chi = 128; r = 1.44; d = 3; errtol = 10 ** (-7);
+    PS = 2;
     Totprob, EE, RE = RCS1DMultiCycleAvg(NumSample, n, m, d, r, loss, chi, errtol, PS);
     print(Totprob)
     print(EE)

@@ -128,6 +128,8 @@ class RankCompute:
             # print('rank: {}, status: {}'.format(rank, status))
         comm.send(self.theta_time, self.node_control_rank, tag=3)
         comm.send(self.svd_time, self.node_control_rank, tag=4)
+        del d_LR_obj, d_Glc_obj,d_Gcr_obj, d_change_charges_C, d_change_idx_C
+        mempool.free_all_blocks()
 
 
     def RankProcess(self, charge_c_0, charge_c_1, d_U_r, d_U_i, d_change_charges_C, d_change_idx_C, d_cNewL_obj, d_cNewR_obj, d_LR_obj, d_Glc_obj, d_Gcr_obj, aligner, location):
@@ -176,8 +178,8 @@ class RankCompute:
         comm.Send([cp.asnumpy(d_V), MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=0)
         comm.Send([cp.asnumpy(d_W), MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=1)
         comm.Send([cp.asnumpy(d_Lambda), MPI.FLOAT], self.node_control_rank, tag=2)
-        # comm.Send([d_V, MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=0)
-        # comm.Send([d_W, MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=1)
+        # comm.Send([d_V.reshape(-1), MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=0)
+        # comm.Send([d_W.reshape(-1), MPI.C_FLOAT_COMPLEX], self.node_control_rank, tag=1)
         # comm.Send([cp.asnumpy(d_Lambda), MPI.FLOAT], self.node_control_rank, tag=2)
 
         del d_V, d_W, d_T, d_C
