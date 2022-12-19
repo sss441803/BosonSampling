@@ -90,7 +90,11 @@ class MasterMPO:
         n_th = 1 / 2 * (np.sqrt(am * ap) - 1)
         nn = 40
         
-        sq = (squeeze(nn, s) * thermal_dm(nn, n_th) * squeeze(nn, s).dag()).full()[:(d + 1), :(d + 1)]
+        try:
+            sq = (squeeze(nn, s) * thermal_dm(nn, n_th) * squeeze(nn, s).dag()).full()[:(d + 1), :(d + 1)]
+        except ValueError:
+            print('This configuration yields invalid squeezing.')
+            return False
 
         if self.PS == None:
             for i in range(d):
@@ -185,8 +189,11 @@ class MasterMPO:
         self.Gamma = np.ascontiguousarray(self.Gamma)
         self.Lambda = np.ascontiguousarray(self.Lambda)
         self.charge = np.ascontiguousarray(self.charge)
-        self.normalization = TotalProbFromMPO(self.n, self.d, self.Gamma, self.Lambda, self.charge)
+        self.normalization = np.real(TotalProbFromMPO(self.n, self.d, self.Gamma, self.Lambda, self.charge))
         print('Total probability normalization factor: ', self.normalization)
+        if not self.normalization > 0:
+            print('Configuration yields invalid probabilities. Exiting')
+            return False
 
         self.canonicalize = True
         print('Canonicalization update')
@@ -211,6 +218,7 @@ class MasterMPO:
         self.charge[:, :init_chi] = charge_temp
 
         self.UpdateReflectivity()
+        return True
 
 
     #MPO update after a two-qudit gate        
@@ -411,28 +419,37 @@ class MasterMPO:
 
     def FullUpdate(self):
 
-        self.MPOInitialization()
-        self.EEPar[:, 0] = self.MPOEntanglementEntropy()
-        # alpha_array = [0.5, 0.6, 0.7, 0.8, 0.9]
-        # for i in range(5):
-            # self.REPar[:, 0, i] = self.MPORenyiEntropy(alpha_array[i])
-        full_start = time.time()
+        initialization_successful = self.MPOInitialization()
 
-        for k in range(self.n):
-            self.LayerUpdate(k)
-            start = time.time()
-            if k % 10 == 0:
-                self.TotalProbPar[k+1] = TotalProbFromMPO(self.n, self.d, self.Gamma, self.Lambda, self.charge)
-            self.EEPar[:, k+1] = self.MPOEntanglementEntropy()
-            self.ee_prob_cal_time += time.time() - start
+        if initialization_successful:
+            self.EEPar[:, 0] = self.MPOEntanglementEntropy()
+            # alpha_array = [0.5, 0.6, 0.7, 0.8, 0.9]
             # for i in range(5):
-                # self.REPar[:, k + 1, i] = self.MPORenyiEntropy(alpha_array[i])
-            '''Initialial total time is much higher than simulation time due to initialization of cuda context.'''
-            print("m: {:.2f}. Total time: {:.2f}. Update time: {:.2f}. Theta time: {:.2f}. SVD time: {:.2f}. EE_Prob_cal_time: {:.2f}. Align time: {:.2f}. Array cpu time: {:.2f}. Comm time: {:.2f}".format(self.m, time.time()-full_start, self.update_time, self.theta_time, self.svd_time, self.ee_prob_cal_time, self.align_time, self.array_cpu_time, self.comm_time))
+                # self.REPar[:, 0, i] = self.MPORenyiEntropy(alpha_array[i])
+            full_start = time.time()
 
-        while len(self.available_ranks) != self.num_gpu_ranks:
-            self.update_rank_status()
-            time.sleep(0.01)
+            for k in range(self.n):
+                self.LayerUpdate(k)
+                start = time.time()
+                self.TotalProbPar[k+1] = TotalProbFromMPO(self.n, self.d, self.Gamma, self.Lambda, self.charge)
+                self.EEPar[:, k+1] = self.MPOEntanglementEntropy()
+                prob = self.TotalProbPar[np.where(self.TotalProbPar > 0)[0]]
+                if np.max(prob)/np.min(prob) - 1 > 0.1:
+                    print('Accuracy too low. Failed.')
+                    break
+                max_ee_idx = np.argmax(self.EEPar)
+                if k - max_ee_idx % self.EEPar.shape[1] > 20:
+                    print('EE did not increase for 20 epochs. Stopping')
+                    break
+                self.ee_prob_cal_time += time.time() - start
+                # for i in range(5):
+                    # self.REPar[:, k + 1, i] = self.MPORenyiEntropy(alpha_array[i])
+                '''Initialial total time is much higher than simulation time due to initialization of cuda context.'''
+                print("m: {:.2f}. Total time: {:.2f}. Update time: {:.2f}. Theta time: {:.2f}. SVD time: {:.2f}. EE_Prob_cal_time: {:.2f}. Align time: {:.2f}. Array cpu time: {:.2f}. Comm time: {:.2f}".format(self.m, time.time()-full_start, self.update_time, self.theta_time, self.svd_time, self.ee_prob_cal_time, self.align_time, self.array_cpu_time, self.comm_time))
+
+            while len(self.available_ranks) != self.num_gpu_ranks:
+                self.update_rank_status()
+                time.sleep(0.01)
 
         for target_rank in self.available_ranks:
             comm.send('Finished', target_rank, tag=100)

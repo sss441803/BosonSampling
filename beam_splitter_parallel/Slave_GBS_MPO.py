@@ -9,6 +9,10 @@ from mpo_sort import Aligner
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
+gpu = rank % 4
+if rank != 0:
+    cp.cuda.Device(gpu).use()
+    print('rank {} using gpu {}'.format(rank, gpu))
 
 
 data_type = np.complex64

@@ -1,5 +1,4 @@
 '''Full simulation code containing the Device method (cupy, unified update)'''
-import argparse
 import os
 import time
 from math import sinh, sqrt
@@ -7,7 +6,6 @@ from filelock import FileLock
 import pickle
 import sys
 
-import cupy as cp
 import numpy as np
 np.set_printoptions(3)
 from qutip import squeeze, thermal_dm
@@ -23,10 +21,7 @@ num_gpu_ranks = comm.Get_size() - 1
 rank = comm.Get_rank()
 # print(rank)
 # gpu = (rank%17-1)%num_gpus_per_node
-gpu = rank % 4
 # if rank % 17 != 0:
-cp.cuda.Device(gpu).use()
-print('rank {} using gpu {}'.format(rank, gpu))
 
 
 def MasterMultiCycle(num_gpu_ranks, n, m, d, r, loss, init_chi, chi, errtol = 10 ** (-6), PS = None):
@@ -107,7 +102,7 @@ def main():
                         chi_array = np.load(begin_dir + 'chi.npy')
                         chi = int(np.max(chi_array))
                         prob = np.load(begin_dir + 'chi_{}_Totprob.npy'.format(chi))
-                        prob = prob[np.where(prob != 0)[0]]
+                        prob = prob[np.where(prob > 0)[0]]
                         print('prob: ', prob)
                         if min(prob) != 0:
                             error = np.max(prob)/np.min(prob) - 1
@@ -122,10 +117,14 @@ def main():
                             status = 'skip'
                     else:
                         status = 'run'
+
+                    print('Loss: {}. Chi: {}'.format(loss, chi))
                     
                     if status == 'run':
-                        if chi > 10000:
+                        if chi > 3000:
                             print('Required bond-dimension chi too large. Moving on to next experiment.')
+                            status = 'skip'
+                        elif n > 70:
                             status = 'skip'
                         else:
                             # Will run the first found incomplete experiment, set status to in progress
@@ -166,9 +165,12 @@ def main():
                 EE_file = begin_dir + 'chi_{}_EE.npy'.format(chi)
                 assert not os.path.isfile(prob_file), '{} exists already. Error.'.format(prob_file)
                 assert not os.path.isfile(EE_file), '{} exists already. Error.'.format(EE_file)
-                np.save(prob_file, Totprob)
-                np.save(EE_file, EE)
-                np.save(begin_dir + 'chi.npy', chi_array)
+                if np.sum(Totprob > 0) > 0:
+                    np.save(prob_file, Totprob)
+                    np.save(EE_file, EE)
+                    np.save(begin_dir + 'chi.npy', chi_array)
+                else:
+                    print('Results invalid. Not saving.')
                 print("Time cost", time.time() - t0)
             # elif rank % 5 != 0:
             elif rank != 0:
