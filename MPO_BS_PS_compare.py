@@ -1,5 +1,6 @@
 import numpy as np
 import numpy as jnp
+from scipy.stats import binom
 
 np.random.seed(1)
 np.set_printoptions(precision=3)
@@ -9,6 +10,7 @@ from scipy.special import factorial, comb
 
 from itertools import combinations
 from filelock import FileLock
+from math import sqrt
 import pickle
 import os
 import time
@@ -21,6 +23,8 @@ def change_idx(x, d):
 def Rand_BS_MPS(d, r):
     # #t = 1 / np.sqrt(2); r = 1 / np.sqrt(2);
     t = np.sqrt(1 - r ** 2) * np.exp(1j * np.random.rand() * 2 * np.pi);
+    if r == 0:
+        t = 1
     r = r * np.exp(1j * np.random.rand() * 2 * np.pi);
     ct = np.conj(t); cr = np.conj(r);
     bs_coeff = lambda n, m, k, l: np.sqrt(factorial(l) * factorial(n + m - l) / factorial(n) / factorial(m)) * comb(n, k) * comb(m, l - k) * (t ** k) * (ct ** (m - l + k)) * (r ** (n - k)) * ((-cr) ** (l - k))
@@ -185,7 +189,7 @@ class MPO:
         self.post_time = 0
         self.cycle_time = 0
 
-    def MPOInitialization(self):
+    def MPOInitialization1(self):
         self.Lambda = np.zeros([self.n - 1, self.chi], dtype = 'float32');
         self.A = np.zeros([self.n, self.chi, self.chi], dtype = 'complex64');
         self.charge = np.zeros([self.n + 1, self.chi, 2], dtype = 'int32');
@@ -209,11 +213,13 @@ class MPO:
         self.normalization = np.real(self.TotalProbFromMPO())
         print('Total probability normalization factor: ', self.normalization)
 
-        print('Canonicalization update')
-        for l in range(self.n - 1):
-            self.MPOtwoqubitCombined(l, 0)
+        # print('Canonicalization update')
+        # for l in range(self.m):
+        #     self.MPOtwoqubitCombined(l, 0)
 
-    def MPOInitialization1(self):
+        print(self.A, self.Lambda, self.charge)
+
+    def MPOInitialization2(self):
         
         self.Lambda = np.zeros([self.chi, self.n - 1], dtype = 'float32');
         self.A = np.zeros([self.chi, self.chi, self.n], dtype = 'complex64');
@@ -273,8 +279,207 @@ class MPO:
         # print(self.A, self.Lambda, self.charge)
 
         print('Canonicalization update')
-        for l in range(self.n - 1):
+        for l in range(self.m):
             self.MPOtwoqubitCombined(l, 0)
+        for l in range(self.m):
+            self.MPOtwoqubitCombined(l, 0)
+
+    def MPOInitialization(self):
+        
+        chi = self.chi; init_chi = self.init_chi; d = self.d; K = self.m
+
+        self.Lambda_edge = np.ones(chi, dtype = 'float32') # edge lambda (for first and last site) don't exists and are ones
+        self.Lambda = np.zeros([init_chi, self.n - 1], dtype = 'float32')
+        self.Gamma = np.zeros([init_chi, init_chi, self.n], dtype = 'complex64')  
+        self.charge = d * np.ones([init_chi, self.n + 1, 2], dtype = 'int32')
+        self.charge[0] = 0
+        
+        rho = np.zeros([d, d], dtype = 'complex64')
+        rho[0, 0] = loss
+        rho[1, 1] = 1 - loss
+
+        if self.PS == None:
+            for i in range(d):
+                self.charge[i, 0, 0] = i
+                self.charge[i, 0, 1] = i
+            #pre_chi = d
+            updated_bonds = np.array([bond for bond in range(d)])
+        else:
+            self.charge[0, 0, 0] = self.PS
+            self.charge[0, 0, 1] = self.PS
+            # pre_chi = 1
+            updated_bonds = np.array([0])
+
+        for i in range(K - 1):
+            print('Initializing mode ', i)
+            #chi_ = 0
+            #for j in range(pre_chi):
+            bonds_updated = np.zeros(d**2)
+            for j in updated_bonds:
+                if self.charge[j, i, 0] == d:
+                    c1 = 0
+                else:
+                    c1 = self.charge[j, i, 0]
+                for ch_diff1 in range(c1, -1, -1):
+                    if self.charge[j, i, 1] == d:
+                        c2 = 0
+                    else:
+                        c2 = self.charge[j, i, 1]
+                    for ch_diff2 in range(c2, -1, -1):
+                        if np.abs(rho[ch_diff1, ch_diff2]) <= self.errtol:
+                            continue
+                        #self.Gamma_temp[j, chi_, i] = sq[ch_diff1, ch_diff2]
+                        #self.charge[chi_, i + 1, 0] = c1 - ch_diff1
+                        #self.charge[chi_, i + 1, 1] = c2 - ch_diff2
+                        self.Gamma[j, (c1 - ch_diff1) * d + c2 - ch_diff2, i] = rho[ch_diff1, ch_diff2]
+                        self.charge[(c1 - ch_diff1) * d + c2 - ch_diff2, i + 1, 0] = c1 - ch_diff1
+                        self.charge[(c1 - ch_diff1) * d + c2 - ch_diff2, i + 1, 1] = c2 - ch_diff2
+                        bonds_updated[(c1 - ch_diff1) * d + c2 - ch_diff2] = 1
+                        #chi_ += 1
+            # self.Lambda[:chi_, i] = 1
+            #pre_chi = chi_
+            updated_bonds = np.where(bonds_updated == 1)[0]
+            self.Lambda[updated_bonds, i] = 1
+            # print('Chi ', chi_)
+
+        print('Computing Gamma')
+        # for j in range(pre_chi):
+        for j in updated_bonds:
+            if self.charge[j, K - 1, 0] == d:
+                c0 = 0
+            else:
+                c0 = self.charge[j, K - 1, 0]
+            if self.charge[j, K - 1, 1] == d:
+                c1 = 0
+            else:
+                c1 = self.charge[j, K - 1, 1]
+            self.Gamma[j, 0, K - 1] = rho[c0, c1]
+        
+        for i in range(self.m - 1, self.n - 1):
+            self.Lambda[0, i] = 1
+            self.charge[0, i + 1, 0] = 0
+            self.charge[0, i + 1, 1] = 0
+        
+        print('Update gamma from gamme_temp')
+        for i in range(self.m):
+            self.Gamma[:, :, i] = np.multiply(self.Gamma[:, :, i], self.Lambda[:, i].reshape(1, -1))
+
+        print('Update the rest of gamma values to 1')
+        for i in range(self.m, self.n):
+            self.Gamma[0, 0, i] = 1
+
+        print('Array transposition')
+        self.Gamma = np.transpose(self.Gamma, (2, 0, 1))
+        self.Lambda = np.transpose(self.Lambda, (1, 0))
+        self.charge = np.transpose(self.charge, (1, 0, 2))
+
+        print('Start sorting')
+
+        # Sorting bonds based on bond charges
+        for i in range(self.n + 1):
+            # print('Sorting')
+            idx = np.lexsort((self.charge[i, :, 1], self.charge[i, :, 0]))
+            # print('Indexing')
+            self.charge[i] = self.charge[i, idx]
+            if i > 0:
+                self.Gamma[i - 1] = self.Gamma[i - 1][:, idx]
+                if i < self.n:
+                    self.Lambda[i - 1] = self.Lambda[i - 1, idx]
+            if i < self.n:
+                self.Gamma[i] = self.Gamma[i, idx]
+
+        self.A = self.Gamma
+        self.normalization = self.TotalProbFromMPO()
+        print('Total probability normalization factor: ', self.normalization)
+
+        charge_temp = np.copy(self.charge)
+        Lambda_temp = np.copy(self.Lambda)
+        Gamma_temp = np.copy(self.Gamma)
+        self.charge = d * np.ones([self.n + 1, chi, 2], dtype = 'int32')
+        self.Lambda = np.zeros([self.n - 1, chi], dtype = 'float32')
+        self.Gamma = np.zeros([self.n, chi, chi], dtype = 'complex64')
+
+        self.Gamma[:, :init_chi, :init_chi] = Gamma_temp
+        self.Lambda[:, :init_chi] = Lambda_temp
+        self.charge[:, :init_chi] = charge_temp
+
+        self.A = self.Gamma
+        print('Canonicalization update')
+        for l in range(self.n - 2, -1, -1):
+            self.MPOtwoqubitCombined(l, 0)
+        # for l in range(self.n - 1):
+        #     self.MPOtwoqubitCombined(l, 0)
+
+    def MPOInitialization1(self):
+        
+        chi = self.chi; init_chi = self.init_chi; d = self.d; K = self.m
+
+        self.Lambda_edge = np.ones(chi, dtype = 'float32') # edge lambda (for first and last site) don't exists and are ones
+        self.Lambda = np.zeros([init_chi, self.n - 1], dtype = 'float32')
+        self.A = np.zeros([init_chi, init_chi, self.n], dtype = 'complex64')  
+        self.charge = d * np.ones([init_chi, self.n + 1, 2], dtype = 'int32')
+        self.charge[0] = 0
+        
+        rho = np.zeros([d, d], dtype = 'complex64')
+        rho[0, 0] = loss
+        rho[1, 1] = 1 - loss
+
+        for site in range(self.m):
+            n_photons = self.m - site
+            for n_kept_photons in range(n_photons + 1):
+                self.charge[n_kept_photons, site, 0] = n_kept_photons
+                self.charge[n_kept_photons, site, 1] = n_kept_photons
+
+        for site in range(self.m - 1):
+            n_photons = self.m - site - 1
+            for n_kept_photons in range(n_photons + 1):
+                self.Lambda[n_kept_photons, site] = sqrt(binom.pmf(n_kept_photons, n_photons, loss))
+
+        for site in range(self.m):
+            n_photons = self.m - site - 1
+            for n_kept_photons in range(n_photons + 1):
+                self.A[n_kept_photons, n_kept_photons, site] = loss
+                self.A[n_kept_photons + 1, n_kept_photons, site] = 1 - loss
+
+        for i in range(self.m - 1, self.n - 1):
+            self.Lambda[0, i] = 1
+            self.charge[0, i + 1, 0] = 0
+            self.charge[0, i + 1, 1] = 0
+        
+        # print('Update gamma from gamme_temp')
+        # for i in range(self.m):
+        #     self.A[:, :, i] = np.multiply(self.A[:, :, i], self.Lambda[:, i].reshape(1, -1))
+
+        print('Update the rest of gamma values to 1')
+        for i in range(self.m, self.n):
+            self.A[0, 0, i] = 1
+
+        print('Array transposition')
+        self.A = np.transpose(self.A, (2, 0, 1))
+        self.Lambda = np.transpose(self.Lambda, (1, 0))
+        self.charge = np.transpose(self.charge, (1, 0, 2))
+
+        print(self.A, self.Lambda, self.charge)
+
+        self.normalization = self.TotalProbFromMPO()
+        print('Total probability normalization factor: ', self.normalization)
+
+        charge_temp = np.copy(self.charge)
+        Lambda_temp = np.copy(self.Lambda)
+        A_temp = np.copy(self.A)
+        self.charge = d * np.ones([self.n + 1, chi, 2], dtype = 'int32')
+        self.Lambda = np.zeros([self.n - 1, chi], dtype = 'float32')
+        self.A = np.zeros([self.n, chi, chi], dtype = 'complex64')
+
+        self.A[:, :init_chi, :init_chi] = A_temp
+        self.Lambda[:, :init_chi] = Lambda_temp
+        self.charge[:, :init_chi] = charge_temp
+
+        # print('Canonicalization update')
+        # for l in range(self.n - 2, -1, -1):
+        #     self.MPOtwoqubitCombined(l, 0)
+        # for l in range(self.n - 1):
+        #     self.MPOtwoqubitCombined(l, 0)
         
     #MPO update after a two-qudit gate
 
@@ -856,6 +1061,7 @@ def RCS1DMultiCycleAvg(n, m, d, loss, chi, PS):
     init_chi = d ** 2
     boson = MPO(n, m, d, loss, init_chi, chi, PS=PS)
     boson.MPOInitialization();
+    np.random.seed(1)
     if boson.normalization > 0:
         return boson.RCS1DMultiCycle()
     else:
@@ -934,15 +1140,18 @@ if __name__ == "__main__":
 
         t0 = time.time()
         # errtol = 10 ** (-7)   
-        # n, m, beta, errtol = 20, 5, 1.0, 10**(-7)
+        # n, m, beta, errtol = 10, 5, 1.0, 10**(-7)
         # ideal_ave_photons = beta * m
         # lossy_ave_photons = 0.5 * ideal_ave_photons
         # loss = round(1000*(1 - lossy_ave_photons/ideal_ave_photons))/1000
         # PS = int((1-loss)*m)
         # PS += 1
         # d = PS + 1
+        # PS = None
+        # d = m+1
         # init_chi = d**2
-        # chi = int(max(32*2**PS, d**2, 512))
+        # chi = int(max(4*2**d, d**2, 512))
+        ## chi = 128
         # print(n, m, beta, loss, PS, d, chi)
 
         if not os.path.isfile(begin_dir + 'EE.npy'):
@@ -954,7 +1163,7 @@ if __name__ == "__main__":
                 # chi *= 4
                 Totprob, EE = RCS1DMultiCycleAvg(n, m, d, loss, chi, PS)
                 print(Totprob)
-                # print(EE)
+                print(EE)
                 # Saving results
                 if os.path.isfile(begin_dir + 'chi.npy'):
                     chi_array = np.load(begin_dir + 'chi.npy')
