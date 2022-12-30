@@ -20,12 +20,13 @@ warnings.filterwarnings('ignore')
 def change_idx(x, d):
     return d * x[:, 0] + x[:, 1]
 
-def Rand_BS_MPS(d, r):
+def Rand_BS_MPS(seed, d, r):
     # #t = 1 / np.sqrt(2); r = 1 / np.sqrt(2);
-    t = np.sqrt(1 - r ** 2) * np.exp(1j * np.random.rand() * 2 * np.pi);
+    random = np.random.RandomState(seed)
+    t = np.sqrt(1 - r ** 2) * np.exp(1j * random.rand() * 2 * np.pi);
     if r == 0:
         t = 1
-    r = r * np.exp(1j * np.random.rand() * 2 * np.pi);
+    r = r * np.exp(1j * random.rand() * 2 * np.pi);
     ct = np.conj(t); cr = np.conj(r);
     bs_coeff = lambda n, m, k, l: np.sqrt(factorial(l) * factorial(n + m - l) / factorial(n) / factorial(m)) * comb(n, k) * comb(m, l - k) * (t ** k) * (ct ** (m - l + k)) * (r ** (n - k)) * ((-cr) ** (l - k))
     BS = np.zeros([d, d, d, d], dtype = 'complex64');
@@ -979,9 +980,9 @@ class MPO:
             
     def MPOtwoqubitCombined(self, l, r):
         seed = np.random.randint(0, 13579)
-        np.random.seed(seed)
+        print(seed)
         start = time.time()
-        UnitaryMPS = Rand_BS_MPS(self.d, r)
+        UnitaryMPS = Rand_BS_MPS(seed, self.d, r)
         self.u_time += time.time() - start
         if l == 0:
             self.MPOtwoqubitUpdateLeft(UnitaryMPS);
@@ -1072,90 +1073,90 @@ def RCS1DMultiCycleAvg(n, m, d, loss, chi, PS):
 if __name__ == "__main__":
     exp_idx_beginning = 0
     while True:
-    # Loop until all experiments are over
-        time.sleep(np.random.rand(1).item())
-        with FileLock("./experiment.pickle.lock"):
-            # work with the file as it is now locked
-            print("Lock acquired.")
-            with open("./experiment.pickle", 'rb') as experiment_file:
-                experiments = pickle.load(experiment_file)
-            found_experiment = False
-            for exp_idx in range(exp_idx_beginning, len(experiments)):
-                experiment = experiments[exp_idx]
-                if experiment['status'] == 'incomplete':
-                    found_experiment = True
-                    print('Found experiment: ', experiment)
-                    # Break the loop once an incomplete experiment is found
-                    break
-            exp_idx_beginning = exp_idx + 1
-            if not found_experiment:
-                # If loop never broke, no experiment was found
-                print('All experiments already ran. Exiting.')
-                quit()
-            else:
-                n, m, beta, loss, PS = experiment['n'], experiment['m'], experiment['beta'], experiment['loss'], experiment['PS']
-                d = PS + 1
-                chi = int(max(8*2**d, 256))
-                begin_dir = './SPBSPSResults/n_{}_m_{}_beta_{}_loss_{}_PS_{}_'.format(n, m, beta, loss, PS)
-                # begin_dir = './SPBSPSNoneResults/n_{}_m_{}_beta_{}_loss_{}_'.format(n, m, beta, loss)
-                if os.path.isfile(begin_dir + 'chi.npy'):
-                    chi_array = np.load(begin_dir + 'chi.npy')
-                    chi = int(np.max(chi_array))
-                    prob = np.load(begin_dir + 'chi_{}_Totprob.npy'.format(chi))
-                    prob = prob[np.where(prob > 0)[0]]
-                    print('prob: ', prob)
-                    if min(prob) != 0:
-                        error = np.max(prob)/np.min(prob) - 1
-                    error = np.max(error)
-                    print('error: ', error)
-                    if error > 0.1:
-                        chi *= 2
-                        print('chi was too small producing error {}. Increasing chi to {}'.format(error, chi))
-                        status = 'run'
-                    else:
-                        print('Simulation with suitable accuracy already ran.')
-                        status = 'skip'
-                else:
-                    status = 'run'
+    # # Loop until all experiments are over
+    #     time.sleep(np.random.rand(1).item())
+    #     with FileLock("./experiment.pickle.lock"):
+    #         # work with the file as it is now locked
+    #         print("Lock acquired.")
+    #         with open("./experiment.pickle", 'rb') as experiment_file:
+    #             experiments = pickle.load(experiment_file)
+    #         found_experiment = False
+    #         for exp_idx in range(exp_idx_beginning, len(experiments)):
+    #             experiment = experiments[exp_idx]
+    #             if experiment['status'] == 'incomplete':
+    #                 found_experiment = True
+    #                 print('Found experiment: ', experiment)
+    #                 # Break the loop once an incomplete experiment is found
+    #                 break
+    #         exp_idx_beginning = exp_idx + 1
+    #         if not found_experiment:
+    #             # If loop never broke, no experiment was found
+    #             print('All experiments already ran. Exiting.')
+    #             quit()
+    #         else:
+    #             n, m, beta, loss, PS = experiment['n'], experiment['m'], experiment['beta'], experiment['loss'], experiment['PS']
+    #             d = PS + 1
+    #             chi = int(max(8*2**d, 256))
+    #             begin_dir = './SPBSPSResults/n_{}_m_{}_beta_{}_loss_{}_PS_{}_'.format(n, m, beta, loss, PS)
+    #             # begin_dir = './SPBSPSNoneResults/n_{}_m_{}_beta_{}_loss_{}_'.format(n, m, beta, loss)
+    #             if os.path.isfile(begin_dir + 'chi.npy'):
+    #                 chi_array = np.load(begin_dir + 'chi.npy')
+    #                 chi = int(np.max(chi_array))
+    #                 prob = np.load(begin_dir + 'chi_{}_Totprob.npy'.format(chi))
+    #                 prob = prob[np.where(prob > 0)[0]]
+    #                 print('prob: ', prob)
+    #                 if min(prob) != 0:
+    #                     error = np.max(prob)/np.min(prob) - 1
+    #                 error = np.max(error)
+    #                 print('error: ', error)
+    #                 if error > 0.1:
+    #                     chi *= 2
+    #                     print('chi was too small producing error {}. Increasing chi to {}'.format(error, chi))
+    #                     status = 'run'
+    #                 else:
+    #                     print('Simulation with suitable accuracy already ran.')
+    #                     status = 'skip'
+    #             else:
+    #                 status = 'run'
 
-                print('Loss: {}. Chi: {}'.format(loss, chi))
+    #             print('Loss: {}. Chi: {}'.format(loss, chi))
                 
-                if status == 'run':
-                    if chi > 5000:
-                        print('Required bond-dimension chi too large. Moving on to next experiment.')
-                        status = 'skip'
-                    # elif n > 100:
-                    #     print('Too many modes. Moving on to next experiment.')
-                    #     status = 'skip'
-                    else:
-                        # Will run the first found incomplete experiment, set status to in progress
-                        experiments[exp_idx]['status'] = 'in progress'
-                        # Update experiment track file
-                        with open('./experiment.pickle', 'wb') as file:
-                            pickle.dump(experiments, file)
-                        status = 'run'
+    #             if status == 'run':
+    #                 if chi > 5000:
+    #                     print('Required bond-dimension chi too large. Moving on to next experiment.')
+    #                     status = 'skip'
+    #                 # elif n > 100:
+    #                 #     print('Too many modes. Moving on to next experiment.')
+    #                 #     status = 'skip'
+    #                 else:
+    #                     # Will run the first found incomplete experiment, set status to in progress
+    #                     experiments[exp_idx]['status'] = 'in progress'
+    #                     # Update experiment track file
+    #                     with open('./experiment.pickle', 'wb') as file:
+    #                         pickle.dump(experiments, file)
+    #                     status = 'run'
 
-        if status == 'skip':
-            continue
+    #     if status == 'skip':
+    #         continue
 
         t0 = time.time()
-        # errtol = 10 ** (-7)   
-        # n, m, beta, errtol = 10, 5, 1.0, 10**(-7)
-        # ideal_ave_photons = beta * m
-        # lossy_ave_photons = 0.5 * ideal_ave_photons
-        # loss = round(1000*(1 - lossy_ave_photons/ideal_ave_photons))/1000
-        # PS = int((1-loss)*m)
-        # PS += 1
-        # d = PS + 1
-        # PS = None
-        # d = m+1
-        # init_chi = d**2
-        # chi = int(max(4*2**d, d**2, 512))
-        ## chi = 128
-        # print(n, m, beta, loss, PS, d, chi)
+        errtol = 10 ** (-7)   
+        n, m, beta, errtol = 10, 5, 1.0, 10**(-7)
+        ideal_ave_photons = beta * m
+        lossy_ave_photons = 0.5 * ideal_ave_photons
+        loss = round(1000*(1 - lossy_ave_photons/ideal_ave_photons))/1000
+        PS = int((1-loss)*m)
+        PS += 1
+        d = PS + 1
+        PS = None
+        d = m+1
+        init_chi = d**2
+        chi = int(max(4*2**d, d**2, 512))
+        chi = 512
+        print(n, m, beta, loss, PS, d, chi)
 
-        if not os.path.isfile(begin_dir + 'EE.npy'):
-        # if True:
+        # if not os.path.isfile(begin_dir + 'EE.npy'):
+        if True:
             t0 = time.time()
             try:
                 # PS = None
@@ -1164,23 +1165,23 @@ if __name__ == "__main__":
                 Totprob, EE = RCS1DMultiCycleAvg(n, m, d, loss, chi, PS)
                 print(Totprob)
                 print(EE)
-                # Saving results
-                if os.path.isfile(begin_dir + 'chi.npy'):
-                    chi_array = np.load(begin_dir + 'chi.npy')
-                else:
-                    chi_array = np.array([])
-                assert not np.sum(chi_array == chi), 'chi {} already in chi array'.format(chi)
-                chi_array = np.append(chi_array, chi)
-                prob_file = begin_dir + 'chi_{}_Totprob.npy'.format(chi)
-                EE_file = begin_dir + 'chi_{}_EE.npy'.format(chi)
-                assert not os.path.isfile(prob_file), '{} exists already. Error.'.format(prob_file)
-                assert not os.path.isfile(EE_file), '{} exists already. Error.'.format(EE_file)
-                np.save(prob_file, Totprob)
-                np.save(EE_file, EE)
-                np.save(begin_dir + 'chi.npy', chi_array)
-                print("Time cost", time.time() - t0)
+                # # Saving results
+                # if os.path.isfile(begin_dir + 'chi.npy'):
+                #     chi_array = np.load(begin_dir + 'chi.npy')
+                # else:
+                #     chi_array = np.array([])
+                # assert not np.sum(chi_array == chi), 'chi {} already in chi array'.format(chi)
+                # chi_array = np.append(chi_array, chi)
+                # prob_file = begin_dir + 'chi_{}_Totprob.npy'.format(chi)
+                # EE_file = begin_dir + 'chi_{}_EE.npy'.format(chi)
+                # assert not os.path.isfile(prob_file), '{} exists already. Error.'.format(prob_file)
+                # assert not os.path.isfile(EE_file), '{} exists already. Error.'.format(EE_file)
+                # np.save(prob_file, Totprob)
+                # np.save(EE_file, EE)
+                # np.save(begin_dir + 'chi.npy', chi_array)
+                # print("Time cost", time.time() - t0)
             except ValueError:
                 print('Bad initialization. Next experiment.')
         else:
             print("Simulation already ran.")
-        # break
+        break
