@@ -1,6 +1,12 @@
 legacy/
 *.out
 holder
+*.npy
+*.lock
+*hostfile*
+*.pickle
+job
+/Results
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
