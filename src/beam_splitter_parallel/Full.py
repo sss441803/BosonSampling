@@ -16,9 +16,10 @@ class FullWorker:
         self.num_gpu_ranks = nodes * (ranks_per_node - 1)
 
 
-    def ExperimentInit(self, input_state_type, n_modes, n_input_states, post_selected_photon_number,local_hilbert_space_dimension, bond_dimension, parameters):
+    def ExperimentInit(self, input_state_type, n_modes, n_input_states, post_selected_photon_number,local_hilbert_space_dimension, bond_dimension, parameters, seed=None):
 
         self.n_modes = n_modes
+        self.n_input_states = n_input_states
         self.local_hilbert_space_dimension = local_hilbert_space_dimension
         self.bond_dimension = bond_dimension
         self.prob = np.zeros([self.n_modes + 1], dtype = 'float32')
@@ -35,7 +36,7 @@ class FullWorker:
         self.running_l_and_rank = []
 
         # Initialize the reflectivities of beam splitters to form a global Haar random array
-        self.reflectivity, self.seeds = ReflectivityAndSeeds(n_modes)
+        self.reflectivity, self.seeds = ReflectivityAndSeeds(n_modes, seed)
         # Initialize the MPO
         self.initialization_successful = self.MPOInit(input_state_type, n_modes, n_input_states, post_selected_photon_number, local_hilbert_space_dimension, parameters)
 
@@ -43,26 +44,9 @@ class FullWorker:
     def MPOInit(self, input_state_type, n_modes, n_input_states, post_selected_photon_number, local_hilbert_space_dimension, parameters):
 
         self.Gamma, self.Lambda, self.charge = Initialize(input_state_type, n_modes, n_input_states, post_selected_photon_number, local_hilbert_space_dimension, parameters)
-        initial_bond_dimension = self.local_hilbert_space_dimension ** 2
-        self.Lambda_edge = np.ones(initial_bond_dimension, dtype = 'float32')
-        self.normalization = np.real(Probability(self.n_modes, self.local_hilbert_space_dimension, self.Gamma, self.Lambda, self.charge))
-        self.prob[0] = self.normalization
-        if not self.normalization > 0:
-            print('Configuration yields invalid probabilities. Exiting')
-            return False
-        self.canonicalize = True
-        print('Canonicalization update')
-        for l in range(self.n_modes - 2, -1, -1):
-            self.Request(0, l, 0, 1)
-            done = False
-            while not done:
-                done = self.Check(l)
-                time.sleep(0.01)
-        self.canonicalize = False
-
-        self.normalization = np.real(Probability(self.n_modes, self.local_hilbert_space_dimension, self.Gamma, self.Lambda, self.charge))
-        print('Total probability normalization factor: ', self.normalization)
-        if not self.normalization > 0:
+        
+        self.prob[0] = np.real(Probability(self.n_modes, self.local_hilbert_space_dimension, self.Gamma, self.Lambda, self.charge))
+        if not self.prob[0] > 0:
             print('Configuration yields invalid probabilities. Exiting')
             return False
 
@@ -73,6 +57,7 @@ class FullWorker:
         self.Lambda = np.zeros([self.n_modes - 1, self.bond_dimension], dtype = 'float32')
         self.Lambda_edge = np.ones(self.bond_dimension, dtype = 'float32')
         self.Gamma = np.zeros([self.n_modes, self.bond_dimension, self.bond_dimension], dtype = 'complex64')
+        initial_bond_dimension = self.local_hilbert_space_dimension ** 2
         self.Gamma[:, :initial_bond_dimension, :initial_bond_dimension] = Gamma_temp
         self.Lambda[:, :initial_bond_dimension] = Lambda_temp
         self.charge[:, :initial_bond_dimension] = charge_temp
@@ -98,9 +83,6 @@ class FullWorker:
         CC = self.charge[mode+1]
         CR = self.charge[mode+2]
 
-        # print('Sending info to rank ', target_rank)
-
-        # print('sending data to ', target_rank)
         comm.isend('New data coming', target_rank, tag=100)
         comm.Isend([LC, MPI.FLOAT], target_rank, tag=0)
         comm.Isend([LR, MPI.FLOAT], target_rank, tag=1)
@@ -112,10 +94,7 @@ class FullWorker:
         comm.isend(reflectivity, target_rank, tag=7)
         comm.isend(seed, target_rank, tag=8)
 
-        if self.canonicalize:
-            bond_dimension = self.local_hilbert_space_dimension ** 2
-        else:
-            bond_dimension = self.bond_dimension
+        bond_dimension = self.bond_dimension
         new_charge = self.local_hilbert_space_dimension * np.ones([bond_dimension, 2], dtype='int32')
         new_Lambda = np.zeros(bond_dimension, dtype='float32')
         Gamma0Out = np.zeros([bond_dimension, bond_dimension], dtype='complex64')
@@ -131,29 +110,29 @@ class FullWorker:
         self.requests_buf[mode] = [new_charge, new_Lambda, Gamma0Out, Gamma1Out]
         
 
-    def Check(self, l) -> bool:
+    def Check(self, mode) -> bool:
 
         # Determining if rank computational results are ready
-        completed = MPI.Request.testall(self.requests[l])
+        completed = MPI.Request.testall(self.requests[mode])
         if not completed[0]:
             # print('Not done')
             return False
 
         # Loading rank computational results
-        new_charge, new_Lambda, Gamma0Out, Gamma1Out = self.requests_buf[l]
+        new_charge, new_Lambda, Gamma0Out, Gamma1Out = self.requests_buf[mode]
         _, _, _, _, svd_time, theta_time = completed[1]
         self.svd_time += svd_time
         self.theta_time += theta_time
 
         # Update charges (modifying CC modifies self.dcharge by pointer)
-        self.charge[l + 1] = new_charge
-        self.Lambda[l] = new_Lambda
-        if l == self.n_modes - 2:
+        self.charge[mode + 1] = new_charge
+        self.Lambda[mode] = new_Lambda
+        if mode == self.n_modes - 2:
             self.Gamma[self.n_modes - 2, :, :min(self.bond_dimension, self.local_hilbert_space_dimension ** 2)] = Gamma0Out[:, :min(self.bond_dimension, self.local_hilbert_space_dimension ** 2)]
             self.Gamma[self.n_modes - 1, :min(self.bond_dimension, self.local_hilbert_space_dimension ** 2), 0] = Gamma1Out[:min(self.bond_dimension, self.local_hilbert_space_dimension ** 2), 0]
         else:
-            self.Gamma[l, :, :] = Gamma0Out
-            self.Gamma[l + 1, :, :] = Gamma1Out
+            self.Gamma[mode, :, :] = Gamma0Out
+            self.Gamma[mode + 1, :, :] = Gamma1Out
 
         return True  
 
@@ -166,27 +145,23 @@ class FullWorker:
             else:
                 new_running_l_and_rank.append([l, rank])
         self.running_l_and_rank = new_running_l_and_rank
-        # print('running l and rank: ', self.running_l_and_rank)
 
-    def LayerUpdate(self, k):
+    def LayerUpdate(self, layer):
 
         start = time.time()
-        for i, l in enumerate(range(k % 2, self.n_modes - 1, 2)):
-            reflectivity = self.reflectivity[k, i]
-            seed = self.seeds[k, i]
-            # print('finished reflectivity')
-            # print(self.available_ranks)
+        for i, mode in enumerate(range(layer % 2, self.n_modes - 1, 2)):
+            if mode >= self.n_input_states + layer:
+                continue
+            reflectivity = self.reflectivity[layer, i]
+            seed = self.seeds[layer, i]
             while len(self.available_ranks) == 0:
-                # print('checking avaiable')
                 self.update_rank_status()
                 time.sleep(0.01)
             target_rank = self.available_ranks.pop(0)
-            self.Request(seed, l, reflectivity, target_rank)
-            # print('finished request')
-            self.running_l_and_rank.append([l, target_rank])
+            self.Request(seed, mode, reflectivity, target_rank)
+            self.running_l_and_rank.append([mode, target_rank])
         while len(self.available_ranks) != self.num_gpu_ranks:
             self.update_rank_status()
-            # print('waiting finish layer')
             time.sleep(0.01)
         self.update_time += time.time() - start
 
@@ -197,28 +172,23 @@ class FullWorker:
 
         if self.initialization_successful:
             self.EE[:, 0] = EntanglementEntropy(self.Lambda)
-            # alpha_array = [0.5, 0.6, 0.7, 0.8, 0.9]
-            # for i in range(5):
-                # self.REPar[:, 0, i] = self.MPORenyiEntropy(alpha_array[i])
             full_start = time.time()
 
-            for k in range(self.n_modes):
-                self.LayerUpdate(k)
+            for layer in range(self.n_modes):
+                self.LayerUpdate(layer)
                 start = time.time()
-                self.prob[k+1] = Probability(self.n_modes, self.local_hilbert_space_dimension, self.Gamma, self.Lambda, self.charge)
-                self.EE[:, k+1] = EntanglementEntropy(self.Lambda)
-                prob = self.prob[np.where(self.prob > 0)[0]]
-                if np.max(prob)/np.min(prob) - 1 > 0.1:
-                    print('Accuracy too low. Failed.')
-                    success = False
-                    break
-                max_ee_idx = np.argmax(self.EE)
-                if k - max_ee_idx % self.EE.shape[1] > 10:
-                    print('EE did not increase for 10 epochs. Stopping')
-                    break
+                self.prob[layer+1] = Probability(self.n_modes, self.local_hilbert_space_dimension, self.Gamma, self.Lambda, self.charge)
+                self.EE[:, layer+1] = EntanglementEntropy(self.Lambda)
+                # prob = self.prob[np.where(self.prob > 0)[0]]
+                # if np.max(prob)/np.min(prob) - 1 > 0.1:
+                #     print('Accuracy too low. Failed.')
+                #     success = False
+                #     break
+                # max_ee_idx = np.argmax(self.EE)
+                # if layer - max_ee_idx % self.EE.shape[1] > 10:
+                #     print('EE did not increase for 10 epochs. Stopping')
+                #     break
                 self.ee_prob_cal_time += time.time() - start
-                # for i in range(5):
-                    # self.REPar[:, k + 1, i] = self.MPORenyiEntropy(alpha_array[i])
                 '''Initialial total time is much higher than simulation time due to initialization of cuda context.'''
                 print("Total time: {:.2f}. Update time: {:.2f}. Theta time: {:.2f}. SVD time: {:.2f}. EE_Prob_cal_time: {:.2f}".format(time.time() - full_start, self.update_time, self.theta_time, self.svd_time, self.ee_prob_cal_time))
 

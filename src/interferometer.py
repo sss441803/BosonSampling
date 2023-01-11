@@ -6,8 +6,9 @@ class my_pdf(rv_continuous):
         return (k - idx) * (1 - x) ** (k - idx - 1)
 my_cv = my_pdf(a = 0, b = 1, name='my_pdf')
 
-def ReflectivityAndSeeds(n_modes):
-    np.random.seed(1)
+def ReflectivityAndSeeds(n_modes, seed=None):
+    if seed != None:
+        np.random.seed(seed)
     reflectivity = np.empty([n_modes, n_modes // 2])
     seeds = np.empty([n_modes, n_modes // 2], dtype=int)
     for k in range(n_modes - 1):

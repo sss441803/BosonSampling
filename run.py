@@ -24,6 +24,7 @@ parser.add_argument('--nodes', type=int, default=0)
 parser.add_argument('--rpn', type=int, help="Ranks per node.", default=0)
 parser.add_argument('--gpn', type=int, help="GPUs per node.", default=0)
 parser.add_argument('--rpg', type=int, help="Ranks per GPU.", default=0)
+parser.add_argument('--seed', type=int, help="Numpy random seed if reproduceability is desired.", default=None)
 args = vars(parser.parse_args())
 
 algorithm = args['al']
@@ -31,6 +32,7 @@ nodes = args['nodes']
 ranks_per_node = args['rpn']
 gpus_per_node = args['gpn']
 ranks_per_gpu = args['rpg']
+seed =  args['seed']
 
 if algorithm == 'cpu':
     rank = 0
@@ -158,9 +160,12 @@ def main():
 
                 # Check if simulation requirements are reasonable
                 if status == 'run':
-                    if bond_dimension > 10000:
+                    if bond_dimension > 20000:
                         print('Required bond-dimension chi too large. Moving on to next experiment.')
                         status = 'skip'
+                    # if bond_dimension < 3000:
+                    #     print('Required bond-dimension chi too small. Moving on to next experiment.')
+                    #     status = 'skip'
                     elif n_modes > 200:
                         print('Too many modes. Moving on to next experiment.')
                         status = 'skip'
@@ -180,7 +185,7 @@ def main():
         # Main rank
         if rank == 0:
             t0 = time.time()
-            Worker.ExperimentInit(input_state_type, n_modes, n_input_states, post_selected_photon_number,local_hilbert_space_dimension, bond_dimension, parameters)
+            Worker.ExperimentInit(input_state_type, n_modes, n_input_states, post_selected_photon_number,local_hilbert_space_dimension, bond_dimension, parameters, seed)
             success, Totprob, EE, RE = Worker.Simulate()
             print(Totprob)
             print(EE)

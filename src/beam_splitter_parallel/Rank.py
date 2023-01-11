@@ -4,7 +4,7 @@ import cupy as cp
 import numpy as np
 
 from ..cuda_kernels import Rand_U, update_MPO
-from ..mpo_sort import Aligner
+from ..mpo_sort import Aligner, charge_range
 
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
@@ -22,36 +22,11 @@ class RankWorker:
         self.bond_dimension = bond_dimension
 
 
-    # Gives the range of left, center and right hand side charge values when center charge is fixed to tau
-    def charge_range(self, tau):
-        # Speficying allowed left and right charges
-        min_charge_l, max_charge_l = tau, self.local_hilbert_space_dimension - 1 # Left must have more or equal photons to its right than center
-        # Possible center site charge
-        min_charge_c, max_charge_c = 0, self.local_hilbert_space_dimension - 1 # The center charge is summed so returns 0 and maximum possible charge.
-        # Possible right site charge
-        min_charge_r, max_charge_r = 0, tau # Left must have more or equal photons to its right than center
-        
-        return min_charge_l, max_charge_l, min_charge_c, max_charge_c, min_charge_r, max_charge_r
-
-
     def Simulate(self):
         status = comm.recv(source=0, tag=100)
-        if status != 'Finished':
-            if rank == 1:
-                for _ in range(self.n_modes - 1):
-                    self.canonicalize()
-                    status = comm.recv(source=0, tag=100)
             while status != 'Finished':
                 self.RankProcess()
                 status = comm.recv(source=0, tag=100)
-        # print(rank, 'Finished')
-
-
-    def canonicalize(self):
-        chi = self.bond_dimension
-        self.bond_dimension = self.local_hilbert_space_dimension ** 2
-        self.RankProcess()
-        self.bond_dimension = chi
 
 
     def RankProcess(self):
@@ -76,7 +51,6 @@ class RankWorker:
         comm.Recv([Gcr, MPI.C_FLOAT_COMPLEX], source=0, tag=6)
         r = comm.recv(source=0, tag=7)
         seed = comm.recv(source=0, tag=8)
-        # print('rank: {} got data'.format(rank))#, LC, LR, CL, CC, CR, Glc, Gcr, r, location, seed)
 
         # Initializing unitary matrix on GPU
         np.random.seed(seed)
@@ -119,8 +93,8 @@ class RankWorker:
                 start = time.time()
 
                 # Bounds for data selection. Given tau (center charge), find the range of possible charges for left, center and right.
-                min_charge_l_0, max_charge_l_0, min_charge_c_0, max_charge_c_0, min_charge_r_0, max_charge_r_0 = self.charge_range(charge_c_0)
-                min_charge_l_1, max_charge_l_1, min_charge_c_1, max_charge_c_1, min_charge_r_1, max_charge_r_1 = self.charge_range(charge_c_1)
+                min_charge_l_0, max_charge_l_0, min_charge_c_0, max_charge_c_0, min_charge_r_0, max_charge_r_0 = charge_range(self.local_hilbert_space_dimension, charge_c_0)
+                min_charge_l_1, max_charge_l_1, min_charge_c_1, max_charge_c_1, min_charge_r_1, max_charge_r_1 = charge_range(self.local_hilbert_space_dimension, charge_c_1)
                 # Selecting data according to charge bounds
                 d_cl_obj = aligner.select_data(d_cNewL_obj, min_charge_l_0, max_charge_l_0, min_charge_l_1, max_charge_l_1)
                 d_cr_obj = aligner.select_data(d_cNewR_obj, min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1)
@@ -137,15 +111,12 @@ class RankWorker:
                     continue
 
                 start = time.time()
-                #print('glc: {}, gcr: {}, ll: {}, lc: {}, lr: {}, cl: {}, cc: {}, cr: {}.'.format(d_glc_obj.data, d_gcr_obj.data, d_ll_obj.data, d_lc_obj.data, d_lr_obj.data, d_cl_obj.data, d_cc_obj.data, d_cr_obj.data))
                 d_C_obj = update_MPO(self.local_hilbert_space_dimension, charge_c_0, charge_c_1, d_U_r, d_U_i, d_glc_obj, d_gcr_obj, d_cl_obj, d_cr_obj, d_change_charges_C, d_change_idx_C)
                 d_T_obj = d_C_obj.clone()
                 d_T_obj.data = cp.multiply(d_C_obj.data, d_lr_obj.data)
                 d_C = aligner.compact_data(d_C_obj)
                 d_T = aligner.compact_data(d_T_obj)
-                
-                dt = time.time() - start
-                self.theta_time += dt
+                self.theta_time += time.time() - start
                 
                 # SVD
                 start = time.time()
@@ -185,8 +156,8 @@ class RankWorker:
             for charge_c_1 in range(smallest_cr_1, largest_cl_1 + 1):
                 start = time.time()
                 # Selecting gamma that will be modified. Modifying gamma will modify Gamma (because they are pointers).
-                min_charge_l_0, max_charge_l_0, _, _, min_charge_r_0, max_charge_r_0 = self.charge_range(charge_c_0)
-                min_charge_l_1, max_charge_l_1, _, _, min_charge_r_1, max_charge_r_1 = self.charge_range(charge_c_1)
+                min_charge_l_0, max_charge_l_0, _, _, min_charge_r_0, max_charge_r_0 = charge_range(self.local_hilbert_space_dimension, charge_c_0)
+                min_charge_l_1, max_charge_l_1, _, _, min_charge_r_1, max_charge_r_1 = charge_range(self.local_hilbert_space_dimension, charge_c_1)
                 idx_gamma0_0, idx_gamma0_1 = aligner.get_select_index(d_Gamma0Out, min_charge_l_0, max_charge_l_0, min_charge_l_1, max_charge_l_1, 0, self.local_hilbert_space_dimension, 0, self.local_hilbert_space_dimension)
                 idx_gamma1_0, idx_gamma1_1 = aligner.get_select_index(d_Gamma1Out, 0, self.local_hilbert_space_dimension, 0, self.local_hilbert_space_dimension, min_charge_r_0, max_charge_r_0, min_charge_r_1, max_charge_r_1)
                 # Finding bond indices (tau_idx) that are in the largest num_lambda singular values and for center charge tau.

@@ -4,57 +4,48 @@ import numpy as np
 
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
-this_node = comm.Get_rank()
-
-
-data_type = np.complex64
-float_type = np.float32
-int_type = np.int32
-
 
 
 class NodeDataWorker:
 
-    def __init__(self, nodes, ranks_per_node, this_node, n, d, chi):
-        self.n = n
-        self.d = d
-        self.chi = chi
+    def __init__(self, nodes, ranks_per_node, this_node):
         self.nodes = nodes
         self.this_node = this_node
-        self.running_charges_and_rank = []
         self.data_ranks = [node * ranks_per_node for node in range(nodes)]
+
+    def ExperimentInit(self, n_modes, local_hilbert_space_dimension, bond_dimension):
+        
+        self.n_modes = n_modes
+        self.local_hilbert_space_dimension = local_hilbert_space_dimension
+        self.bond_dimension = bond_dimension
+        self.running_charges_and_rank = []
         self.sites = []
         self.sides = []
         self.requests = []
-        self.requests_buf = []
+        self.requests_buf = []        
 
-        # Gammas = [[] for _ in range(self.n // self.nodes + (self.this_node < self.n % self.nodes))]
-        # Lambdas = [[] for _ in range((self.n - 1) // self.nodes + (self.this_node < (self.n - 1) % self.nodes))]
-        # Charges = [[] for _ in range((self.n + 1) // self.nodes + (self.this_node < (self.n + 1) % self.nodes))]
         self.Gammas = []
         self.Lambdas= []
-        self.Lambda_edge = np.ones(chi, dtype = 'float32')
+        self.Lambda_edge = np.ones(self.bond_dimension, dtype = 'float32')
         self.Charges = []
-        for site in range(self.n + 1):
-            # print('Node: node {} site {}'.format(this_node, site))
+        for site in range(self.n_modes + 1):
             node = site % self.nodes
             if node != self.this_node:
                 continue
             '''Gammas only go to self.n'''
-            if site < self.n:
-                site_gamma = np.empty([self.chi, self.chi], dtype = 'complex64')
+            if site < self.n_modes:
+                site_gamma = np.empty([self.bond_dimension, self.bond_dimension], dtype = 'complex64')
                 comm.Recv([site_gamma, MPI.C_FLOAT_COMPLEX], 0, tag=1)
                 self.Gammas.append(site_gamma)
             '''Lambdas only go to self.n - 1'''
-            if site < self.n - 1:
-                site_Lambda = np.empty(self.chi, dtype = 'float32')
+            if site < self.n_modes - 1:
+                site_Lambda = np.empty(self.bond_dimension, dtype = 'float32')
                 comm.Recv([site_Lambda, MPI.FLOAT], 0, tag=2)
                 self.Lambdas.append(site_Lambda)
             '''Charges go to self.n + 1'''
-            site_charge = np.empty([self.chi, 2], dtype = 'int32')
+            site_charge = np.empty([self.bond_dimension, 2], dtype = 'int32')
             comm.Recv([site_charge, MPI.INT], 0, tag=3)
             self.Charges.append(site_charge)
-        # print('Node {} finished initialization'.format(this_node))
 
 
     def NodeProcess(self):
@@ -62,7 +53,6 @@ class NodeDataWorker:
         l = comm.recv(source=0, tag=0)
         side = comm.recv(source=0, tag=1)
         compute_rank = comm.recv(source=0, tag=2)
-        # print('Data node {} received l {}, side {}, compute_rank {}'.format(this_node, l, side, compute_rank))
 
         if side == 0:
             # Sending data to compute node
@@ -73,8 +63,8 @@ class NodeDataWorker:
             comm.Isend([CL, MPI.INT], compute_rank, tag=2)
             comm.Isend([Glc, MPI.C_FLOAT_COMPLEX], compute_rank, tag=5)
             # Receiving compute results
-            new_Lambda = np.zeros(self.chi, dtype='float32')
-            Gamma0Out = np.zeros([self.chi, self.chi], dtype='complex64')
+            new_Lambda = np.zeros(self.bond_dimension, dtype='float32')
+            Gamma0Out = np.zeros([self.bond_dimension, self.bond_dimension], dtype='complex64')
             new_Lambda_req = comm.Irecv([new_Lambda, MPI.FLOAT], source=compute_rank, tag=11)
             Gamma0Out_req = comm.Irecv([Gamma0Out, MPI.C_FLOAT_COMPLEX], source=compute_rank, tag=12)
             self.requests.append([new_Lambda_req, Gamma0Out_req])
@@ -82,7 +72,7 @@ class NodeDataWorker:
             self.sides.append(0)
             self.sites.append(l)
         if side == 1:
-            if l != self.n - 2:
+            if l != self.n_modes - 2:
                 LR = self.Lambdas[(l + 1) // self.nodes]
             else:
                 LR = self.Lambda_edge
@@ -91,8 +81,8 @@ class NodeDataWorker:
             comm.Isend([LR, MPI.FLOAT], compute_rank, tag=1)
             comm.Isend([CC, MPI.INT], compute_rank, tag=3)
             comm.Isend([Gcr, MPI.C_FLOAT_COMPLEX], compute_rank, tag=6)
-            new_charge = np.empty([self.chi, 2], dtype='int32')
-            Gamma1Out = np.zeros([self.chi, self.chi], dtype='complex64')
+            new_charge = np.empty([self.bond_dimension, 2], dtype='int32')
+            Gamma1Out = np.zeros([self.bond_dimension, self.bond_dimension], dtype='complex64')
             new_charge_req = comm.Irecv([new_charge, MPI.INT], source=compute_rank, tag=10)
             Gamma1Out_req = comm.Irecv([Gamma1Out, MPI.C_FLOAT_COMPLEX], source=compute_rank, tag=13)
             self.requests.append([new_charge_req, Gamma1Out_req])
@@ -102,12 +92,9 @@ class NodeDataWorker:
         if side == 2:
             CR = self.Charges[(l + 2) // self.nodes]
             comm.Isend([CR, MPI.INT], compute_rank, tag=4)
-        
-        # print('Node data data sent for site ', l)
-
     
     
-    def NodeDataLoop(self):
+    def Simulate(self):
 
         status_req = comm.irecv(source=0, tag=100)
         completed = MPI.Request.test(status_req)
@@ -116,7 +103,7 @@ class NodeDataWorker:
             time.sleep(0.01)
             completed = MPI.Request.test(status_req)
         status = completed[1]
-        # print('Node: {}, status: {}'.format(this_node, status))
+        
         while status != 'Finished':
             if status == 'Data needed':
                 self.NodeProcess()
@@ -130,40 +117,32 @@ class NodeDataWorker:
                 raise Exception("Not a valid status from full_gbs_mpo.")
             status_req = comm.irecv(source=0, tag=100)
             completed = MPI.Request.test(status_req)
-            # print('rank {} checking'.format(rank))
+            
             while not completed[0]:
                 self.check()
                 time.sleep(0.01)
-                # print('checked')
                 completed = MPI.Request.test(status_req)
-            # print('rank {} done checking'.format(rank))
             status = completed[1]
-            # print('Node: {}, status: {}'.format(this_node, status))
 
     
     '''Synchronize Lambda and Charge with host'''
     def Sync(self, receive_back: bool):
-        for site in range(self.n + 1):
-            # print('Node: node {} site {}'.format(this_node, site))
+        for site in range(self.n_modes + 1):
             node = site % self.nodes
             if node != self.this_node:
                 continue
-            # '''Gammas only go to self.n'''
-            # if site < self.n:
-            #     comm.Send([self.Gammas[site // self.nodes], MPI.C_FLOAT_COMPLEX], 0, tag=4)
+            
             '''Lambdas only go to self.n - 1'''
-            if site < self.n - 1:
+            if site < self.n_modes - 1:
                 comm.Send([self.Lambdas[site // self.nodes], MPI.FLOAT], 0, tag=2)
             '''Charges go to self.n + 1'''
             comm.Send([self.Charges[site // self.nodes], MPI.INT], 0, tag=3)
 
         if receive_back:
-            Lambda = np.empty([self.n - 1, self.chi], dtype = 'float32')
-            Charge = np.empty([self.n + 1, self.chi, 2], dtype = 'int32')
-            # Gamma = np.empty([self.n, self.chi, self.chi], dtype = 'complex64')
+            Lambda = np.empty([self.n_modes - 1, self.bond_dimension], dtype = 'float32')
+            Charge = np.empty([self.n_modes + 1, self.bond_dimension, 2], dtype = 'int32')
             comm.Recv([Lambda, MPI.FLOAT], source=0, tag=0)
             comm.Recv([Charge, MPI.INT], source=0, tag=1)
-            # comm.Recv([Gamma, MPI.C_FLOAT_COMPLEX], source=0, tag=2)
             return Lambda, Charge
 
     def ComputeEE(self):
@@ -181,7 +160,7 @@ class NodeDataWorker:
         # These arrays are small so it's okay to synchronize (no need for distributed storage)
         # Lambda, Charge, Gamma = self.Sync(receive_back=True) # send_back=True means all data ranks will have synchronized Lambda and Charge as well
         Lambda, Charge = self.Sync(receive_back=True)
-        length = self.n
+        length = self.n_modes
         GammaResults = self.Gammas
 
         # Selecting indices of gammas based on charge and lambda happens only at the first level, so first round of reduction is special
@@ -196,11 +175,11 @@ class NodeDataWorker:
                 if self.this_node != site % self.nodes:
                     continue
                 # Receiving size of first gamma
-                size_req_list[site].append(comm.irecv(source = self.data_ranks[(2 * site) % self.nodes], tag = 2 * site))
+                size_req_list[site].append(comm.irecv(source = self.data_ranks[(2 * site) % self.nodes], tag = 102 + 2 * site))
                 # Receive size of second gamma only if there is a second gamma needed
                 # not needed for the last site when there are a odd number of sites
                 if not (site == (length - 1) // 2 and length % 2 == 1):
-                    size_req_list[site].append(comm.irecv(source = self.data_ranks[(2 * site + 1) % self.nodes], tag = 2 * site + 1))
+                    size_req_list[site].append(comm.irecv(source = self.data_ranks[(2 * site + 1) % self.nodes], tag = 102 + 2 * site + 1))
             
             # Sending size info
             idx_list = [None for _ in range(length)]
@@ -210,17 +189,17 @@ class NodeDataWorker:
                 target_site = site // 2 # Destination site sending gamma to
                 if first_round:
                     # Selecting indices based on charge and lambda at the first level only
-                    lambda_select = np.where(Lambda[site - 1] > 0)[0] if site != 0 else np.arange(self.chi)
+                    lambda_select = np.where(Lambda[site - 1] > 0)[0] if site != 0 else np.arange(self.bond_dimension)
                     charge_select = np.where(Charge[site, :, 0] == Charge[site, :, 1])[0]
                     idx1 = np.intersect1d(charge_select, lambda_select)
-                    lambda_select = np.where(Lambda[site] > 0)[0] if site != self.n - 1 else np.arange(self.chi)
+                    lambda_select = np.where(Lambda[site] > 0)[0] if site != self.n_modes - 1 else np.arange(self.bond_dimension)
                     charge_select = np.where(Charge[site + 1, :, 0] == Charge[site + 1, :, 1])[0]
                     idx2 = np.intersect1d(charge_select, lambda_select)
                     idx_list[site] = [idx1, idx2]
-                    comm.send([idx1.shape[0], idx2.shape[0]], self.data_ranks[target_site % self.nodes], tag = site)
+                    comm.send([idx1.shape[0], idx2.shape[0]], self.data_ranks[target_site % self.nodes], tag = 102 + site)
                 else:
                     # Otherwise, simply send the shape of gamma
-                    comm.send(GammaResults[site // self.nodes].shape, self.data_ranks[target_site % self.nodes], tag = site)
+                    comm.send(GammaResults[site // self.nodes].shape, self.data_ranks[target_site % self.nodes], tag = 102 + site)
 
             # Receiving Gammas
             req = []
@@ -241,14 +220,14 @@ class NodeDataWorker:
                 size0, size1 = sizes[0]
                 # Receiving gammas (reshaped to 1 dimension so that arrays don't get unexpectedly transposed)
                 gamma1 = np.empty(size0 * size1, dtype = 'complex64')
-                req.append(comm.Irecv([gamma1, MPI.C_FLOAT_COMPLEX], source = self.data_ranks[(2 * site) % self.nodes], tag = 2 * site))
+                req.append(comm.Irecv([gamma1, MPI.C_FLOAT_COMPLEX], source = self.data_ranks[(2 * site) % self.nodes], tag = 102 + 2 * site))
                 if site == (length - 1) // 2 and length % 2 == 1:
                     # set gamma2 to identity if second gamma is not needed for being the last gamma for odd lengths
                     gamma2 = np.identity(size1, dtype = 'complex64').reshape(-1)
                 else:
                     size2, size3 = sizes[1]
                     gamma2 = np.empty(size2 * size3, dtype = 'complex64')
-                    req.append(comm.Irecv([gamma2, MPI.C_FLOAT_COMPLEX], source = self.data_ranks[(2 * site + 1) % self.nodes], tag = 2 * site + 1))
+                    req.append(comm.Irecv([gamma2, MPI.C_FLOAT_COMPLEX], source = self.data_ranks[(2 * site + 1) % self.nodes], tag = 102 + 2 * site + 1))
                 gamma1s.append(gamma1)
                 gamma2s.append(gamma2)
 
@@ -263,8 +242,7 @@ class NodeDataWorker:
                     idx1, idx2 = idx_list[site]
                     gamma = gamma[idx1][:, idx2]
                 gamma = gamma.reshape(-1)
-                # print('node gamma: ', gamma)
-                send_requests.append(comm.Isend([gamma, MPI.C_FLOAT_COMPLEX], self.data_ranks[target_site % self.nodes], tag = site))
+                send_requests.append(comm.Isend([gamma, MPI.C_FLOAT_COMPLEX], self.data_ranks[target_site % self.nodes], tag = 102 + site))
 
             GammaResults = [None for _ in range(len(gamma1s))]
 
@@ -279,22 +257,6 @@ class NodeDataWorker:
                 else:
                     size2, size3 = sizes[1]
                 gamma1, gamma2 = gamma1s[i].reshape(size0, size1), gamma2s[i].reshape(size2, size3)
-                # if first_round:
-                #     site = 2 * (i * self.nodes + self.this_node)
-                #     lambda_select = np.where(Lambda[site - 1] > 0)[0] if site != 0 else np.arange(self.chi)
-                #     charge_select = np.where(Charge[site, :, 0] == Charge[site, :, 1])[0]
-                #     idx1 = np.intersect1d(charge_select, lambda_select)
-                #     lambda_select = np.where(Lambda[site] > 0)[0] if site != self.n - 1 else np.arange(self.chi)
-                #     charge_select = np.where(Charge[site + 1, :, 0] == Charge[site + 1, :, 1])[0]
-                #     idx2 = np.intersect1d(charge_select, lambda_select)
-                #     if not np.allclose(gamma1, Gamma[site, idx1][:, idx2]):
-                #         print(gamma1, Gamma[site, idx1][:, idx2])
-                #     if site < self.n - 1:
-                #         lambda_select = np.where(Lambda[site + 1] > 0)[0] if site + 1 != self.n - 1 else np.arange(self.chi)
-                #         charge_select = np.where(Charge[site + 2, :, 0] == Charge[site + 2, :, 1])[0]
-                #         idx3 = np.intersect1d(charge_select, lambda_select)
-                #         if not np.allclose(gamma2, Gamma[site + 1, idx2][:, idx3]):
-                #             print(gamma2, Gamma[site + 1, idx2][:, idx3])
                 gamma1 = np.matmul(gamma1, gamma2)
                 GammaResults[i] = gamma1
 
@@ -322,17 +284,16 @@ class NodeDataWorker:
                 # Loading compute node results if updates data stored on node 0
                 if side == 0:
                     new_Lambda, Gamma0Out = buf
-                    # print('new lambda ', new_Lambda)
                     self.Lambdas[site // self.nodes] = new_Lambda
-                    if site == self.n - 2:
-                        self.Gammas[site // self.nodes][:, :min(self.chi, self.d ** 2)] = Gamma0Out[:, :min(self.chi, self.d ** 2)]
+                    if site == self.n_modes - 2:
+                        self.Gammas[site // self.nodes][:, :min(self.bond_dimension, self.local_hilbert_space_dimension ** 2)] = Gamma0Out[:, :min(self.bond_dimension, self.local_hilbert_space_dimension ** 2)]
                     else:
                         self.Gammas[site // self.nodes] = Gamma0Out
                 if side == 1:
                     new_charge, Gamma1Out = buf
                     self.Charges[(site + 1) // self.nodes] = new_charge
-                    if site == self.n - 2:
-                        self.Gammas[(site + 1) // self.nodes][:min(self.chi, self.d ** 2), 0] = Gamma1Out[:min(self.chi, self.d ** 2), 0]
+                    if site == self.n_modes - 2:
+                        self.Gammas[(site + 1) // self.nodes][:min(self.bond_dimension, self.local_hilbert_space_dimension ** 2), 0] = Gamma1Out[:min(self.bond_dimension, self.local_hilbert_space_dimension ** 2), 0]
                     else:
                         self.Gammas[(site + 1) // self.nodes] = Gamma1Out
             else:

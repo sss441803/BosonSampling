@@ -420,83 +420,13 @@ class Aligner(object):
 
 
 
+# Gives the range of left, center and right hand side charge values when center charge is fixed to tau
+def charge_range(local_hilbert_space_dimension, tau):
+    # Speficying allowed left and right charges
+    min_charge_l, max_charge_l = tau, local_hilbert_space_dimension - 1 # Left must have more or equal photons to its right than center
+    # Possible center site charge
+    min_charge_c, max_charge_c = 0, local_hilbert_space_dimension - 1 # The center charge is summed so returns 0 and maximum possible charge.
+    # Possible right site charge
+    min_charge_r, max_charge_r = 0, tau # Left must have more or equal photons to its right than center
 
-# Test if sort and alignment works
-if __name__ == '__main__':
-
-    np.set_printoptions(precision=1)
-
-    chi = 8**2
-    d = 6
-    CL = np.random.randint(0, high=d-1, size=[chi, 2])
-    for i in range(chi):
-        if CL[i,0] == 4:
-            CL[i,0] = 3
-    CL = CL[np.lexsort((CL[:, 1], CL[:, 0]))]
-    print('charges: ', CL)
-    CC = np.random.randint(0, high=d-1, size=[chi, 2])
-    for i in range(chi):
-        if CC[i,0] == 3:
-            CC[i,0] = 4
-    CC = CC[np.lexsort((CC[:, 1], CC[:, 0]))]
-    print('charges: ', CC)
-    CR = np.random.randint(1, high=d-1, size=[chi, 2])
-    for i in range(chi):
-        if CR[i,1] == 2:
-            CR[i,1] = 3
-    CR = CR[np.lexsort((CR[:, 1], CR[:, 0]))]
-    print('charges: ', CR)
-
-    aligner = Aligner(d, chi, CL, CC, CR)
-
-    sizeNewL, idxNewL, idxInvL, incNewL1, cNewL = aligner.sizeNewL, aligner.idxNewL, aligner.idxInvL, aligner.incNewL1, aligner.cNewL
-    print('sizeNewL', sizeNewL)
-    print('idxNewL', idxNewL.reshape(-1, 8))
-    print('idxInvL', idxInvL)
-    print('incNewL1', incNewL1)
-    print('cNewL', cNewL.data[:, 1].reshape(-1, 8))
-    print(np.append(np.nan, CL[:, 1])[idxNewL].reshape(-1, 8))
-
-    sizeNewR, idxNewR, idxInvR, incNewR1, cNewR = aligner.sizeNewR, aligner.idxNewR, aligner.idxInvR, aligner.incNewR1, aligner.cNewR
-    print('sizeNewR', sizeNewR)
-    print('idxNewR', idxNewR.reshape(-1, 8))
-    print('idxInvR', idxInvR)
-    print('incNewR1', incNewR1)
-    print('cNewR', cNewR.data[:, 1].reshape(-1, 8))
-    print(np.append(np.nan, CR[:, 1])[idxNewR].reshape(-1, 8))
-
-    Glc = np.random.rand(chi, chi)
-    Gcr = np.random.rand(chi, chi)
-    reference_T_obj = aligner.make_data_obj('T', False, np.matmul(Glc, Gcr), [0, 0])
-    selected_reference_T_obj = aligner.select_data(reference_T_obj, 1,3,0,2,0,3,0,2)
-    selected_reference_T_obj.data = 1
-    print(reference_T_obj.data)
-    quit()
-    #print('Reference T: ', reference_T_obj.data)
-    #print('selected referece T: ', selected_reference_T)
-    Glc = aligner.align_data('Glc', Glc)
-    Gcr = aligner.align_data('Gcr', Gcr)
-    print('Glc ', np.array(Glc != 0, dtype = int).reshape(sizeNewL, chi))
-    print('Gcr: ', np.array(Gcr != 0, dtype = int).reshape(chi, sizeNewR))
-    aligned_T_obj = aligner.make_data_obj('T', True, np.matmul(Glc.data, Gcr.data), [0, 0])
-    #print('Aligned T: ', np.array(aligned_T != 0, dtype = int).reshape(sizeNewL, sizeNewR))
-    T = aligner.compact_data(aligned_T_obj, 1,3,0,2,0,3,0,2)
-    print('Aligned T: ', np.array(aligned_T_obj.data[0].reshape(-1, 8) != 0, dtype = int))
-    print('Aligned Compact T: ', np.array(T != 0, dtype = int))
-    print('Same? ', np.allclose(T, selected_reference_T_obj.data))
-
-    # for i in range(1, 20):
-    #     size = 50 * i
-    #     print("size: ", size)
-    #     start = time.time()
-    #     results = np.linalg.svd(np.random.rand(10, size, size))
-    #     stop = time.time()
-    #     print(stop - start)
-    #     start = time.time()
-    #     results = np.linalg.svd(np.random.rand(size, size))
-    #     stop = time.time()
-    #     print((stop - start) * 10)
-    #     start = time.time()
-    #     results = svdr(np.random.rand(10, 30 * size, 30 * size), size)
-    #     stop = time.time()
-    #     print(stop - start)
+    return min_charge_l, max_charge_l, min_charge_c, max_charge_c, min_charge_r, max_charge_r
